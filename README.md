@@ -1,5 +1,9 @@
 # PhotoGate
 
+> **Disclaimer:** PhotoGate is inspired by the idea behind the Snapgate app (choosing which photos reach your cloud).
+> It is an independent project. It was not reverse engineered from Snapgate, uses none of its code or assets,
+> and is not affiliated with or endorsed by its developer.
+
 Selective photo backup for Android 11+. After you take a photo (or a new file lands in a folder you chose), a quiet
 notification offers **Upload** or **Discard**. Discarded photos stay on the phone and never reach Google Photos.
 

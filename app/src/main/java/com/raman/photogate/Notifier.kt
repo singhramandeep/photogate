@@ -16,6 +16,10 @@ object Notifier {
     const val ACTION_DISCARD = "com.raman.photogate.DISCARD"
     private const val GROUP = "photogate_group"
     private const val SUMMARY_ID = 2
+    private const val SIGN_IN_ID = 3
+
+    /** Per-photo notification id. Offset so a low MediaStore id never collides with 1 (watcher), 2, 3. */
+    fun idFor(mediaId: Long): Int = (mediaId % 1_000_000_000L).toInt() + 1000
 
     fun channels(c: Context) {
         val nm = c.getSystemService(NotificationManager::class.java)
@@ -46,7 +50,7 @@ object Notifier {
     private fun action(c: Context, act: String, id: Long): PendingIntent {
         val i = Intent(c, ActionReceiver::class.java).setAction(act).putExtra("id", id)
         return PendingIntent.getBroadcast(
-            c, id.toInt(), i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            c, idFor(id), i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
 
@@ -70,7 +74,7 @@ object Notifier {
         }
         val nm = NotificationManagerCompat.from(c)
         try {
-            nm.notify(item.id.toInt(), b.build())
+            nm.notify(idFor(item.id), b.build())
             val summary = NotificationCompat.Builder(c, CH_ASK)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle("Photos waiting for your decision")
@@ -86,7 +90,11 @@ object Notifier {
     }
 
     fun cancel(c: Context, id: Long) {
-        NotificationManagerCompat.from(c).cancel(id.toInt())
+        NotificationManagerCompat.from(c).cancel(idFor(id))
+        // the group summary stays behind on its own once its last photo is gone, so clear it too
+        val nm = c.getSystemService(NotificationManager::class.java)
+        val left = nm.activeNotifications.any { it.notification.group == GROUP && it.id != SUMMARY_ID }
+        if (!left) nm.cancel(SUMMARY_ID)
     }
 
     fun needSignIn(c: Context) {
@@ -99,7 +107,7 @@ object Notifier {
             .setContentIntent(openApp(c))
             .build()
         try {
-            NotificationManagerCompat.from(c).notify(3, n)
+            NotificationManagerCompat.from(c).notify(SIGN_IN_ID, n)
         } catch (e: SecurityException) {
         }
     }

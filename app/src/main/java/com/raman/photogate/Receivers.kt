@@ -21,8 +21,13 @@ class ActionReceiver : BroadcastReceiver() {
 /** Restarts the watcher after a reboot or an app update. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
         if (Store.watch(context)) {
-            ContextCompat.startForegroundService(context, Intent(context, WatchService::class.java))
+            try {
+                ContextCompat.startForegroundService(context, Intent(context, WatchService::class.java))
+            } catch (e: IllegalStateException) {
+                // the system refused a background start; the watcher starts again next time the app opens
+            }
         }
     }
 }

@@ -1,6 +1,5 @@
 package com.raman.photogate
 
-import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -8,7 +7,6 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -50,7 +48,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,10 +57,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.google.android.gms.auth.api.identity.Identity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
@@ -76,20 +74,8 @@ class MainActivity : ComponentActivity() {
             if (Store.watch(this)) startWatching(this)
         }
 
-    private val authLauncher =
-        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
-            try {
-                val res = Identity.getAuthorizationClient(this)
-                    .getAuthorizationResultFromIntent(r.data)
-                Store.setConnected(this, res.accessToken != null)
-            } catch (e: Exception) {
-                Toast.makeText(this, "Google sign-in failed: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Media.init(this)
         Notifier.channels(this)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF16A34A))) {
@@ -98,33 +84,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // back from the browser sign-in, or from system settings: refresh screens
+        Store.setWatch(this, Store.watch(this))
+        if (Store.watch(this)) startWatching(this) // also restarts it if a boot start was refused
+        val app = applicationContext
+        Thread { Processor.scan(app) }.start()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent) // photogate://auth from the sign-in page; onResume refreshes
+    }
+
     fun askPermissions() {
-        permissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.POST_NOTIFICATIONS,
-            )
-        )
+        permissionLauncher.launch(Media.permissions())
     }
 
     fun connectGoogle() {
-        Identity.getAuthorizationClient(this).authorize(Auth.request())
-            .addOnSuccessListener { r ->
-                if (r.hasResolution()) {
-                    authLauncher.launch(IntentSenderRequest.Builder(r.pendingIntent!!.intentSender).build())
-                } else {
-                    Store.setConnected(this, true)
-                }
-            }
-            .addOnFailureListener { e ->
-                Toast.makeText(this, "Google sign-in failed: ${e.message}", Toast.LENGTH_LONG).show()
-            }
+        Auth.signIn(this)
     }
 
     companion object {
         fun startWatching(c: Context) {
-            ContextCompat.startForegroundService(c, Intent(c, WatchService::class.java))
+            try {
+                ContextCompat.startForegroundService(c, Intent(c, WatchService::class.java))
+            } catch (e: IllegalStateException) {
+                Toast.makeText(c, "Could not start the watcher: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
 
         fun stopWatching(c: Context) {
@@ -169,11 +157,26 @@ fun App(act: MainActivity) {
 fun PendingScreen() {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val list = remember(tick) { Media.byIds(c, Store.pending(c)) }
+    var list by remember { mutableStateOf<List<Item>>(emptyList()) }
+    LaunchedEffect(tick) {
+        list = withContext(Dispatchers.IO) { Media.byIds(c, Store.pending(c)) }
+    }
+    val queued = remember(tick) { Store.queued(c).size }
+    val connected = remember(tick) { Store.connected(c) }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Pending", style = MaterialTheme.typography.headlineMedium)
         Text("${list.size} photos undecided", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (queued > 0) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$queued approved, waiting to upload" + if (connected) "" else " (connect Google in Settings)",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { Uploader.retryAll(c) }) { Text("Retry now") }
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -203,8 +206,9 @@ fun PendingScreen() {
 @Composable
 fun PendingCell(item: Item) {
     val c = LocalContext.current
-    val bmp by produceState<Bitmap?>(null, item.id) {
-        value = withContext(Dispatchers.IO) { Media.thumb(c, item.uri) }
+    var bmp by remember(item.id) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(item.id) {
+        bmp = withContext(Dispatchers.IO) { Media.thumb(c, item.uri) }
     }
     Card {
         Column {
@@ -239,7 +243,8 @@ fun FoldersScreen() {
     val tick = Store.tick.intValue
     var folders by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var reload by remember { mutableIntStateOf(0) }
-    LaunchedEffect(reload) {
+    val hasPerm = remember(tick) { Media.hasPermission(c) }
+    LaunchedEffect(reload, hasPerm) {
         folders = withContext(Dispatchers.IO) { Media.folders(c) }
     }
     val on = remember(tick) { Store.folders(c) }
@@ -285,8 +290,17 @@ fun ModesScreen() {
     val tick = Store.tick.intValue
     var choice by remember { mutableStateOf("none") }
     var hours by remember { mutableIntStateOf(8) }
-    val until = remember(tick) { Store.modeUntil(c) }
-    val running = remember(tick) { Store.mode(c) != "ask" }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        // a mode ends on its own; re-check so the screen does not keep saying it is running
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val until = remember(tick, now) { Store.modeUntil(c) }
+    val current = remember(tick, now) { Store.mode(c) }
+    val running = current != "ask"
 
     val options = listOf(
         Triple("none", "Don't upload anything", "Photos stay on the phone and never reach the cloud."),
@@ -300,7 +314,7 @@ fun ModesScreen() {
         Spacer(Modifier.height(8.dp))
         if (running) {
             Text(
-                "Mode running until " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                (options.firstOrNull { it.first == current }?.second ?: current) + " until " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
                     .format(Date(until)),
                 style = MaterialTheme.typography.titleMedium,
             )
@@ -352,12 +366,17 @@ fun SettingsScreen(act: MainActivity) {
     val albumOn = remember(tick) { Store.albumOn(c) }
     val window = remember(tick) { Store.windowMin(c) }
     val kept = remember(tick) { Store.discardedCount(c) }
-    var albumName by remember { mutableStateOf(Store.albumName(c)) }
+    var albumName by remember { mutableStateOf(Store.albumNameRaw(c)) }
     val hasPerm = remember(tick) { Media.hasPermission(c) }
+    val email = remember(tick) { Store.email(c) }
+    val authError = remember(tick) { Store.authError(c) }
+    val uploaded = remember(tick) { Store.uploadedCount(c) }
+    var clientId by remember { mutableStateOf(Store.clientId(c)) }
+    var clientSecret by remember { mutableStateOf(Store.clientSecret(c)) }
 
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
-        Text("$kept photos kept out of the cloud", color = MaterialTheme.colorScheme.primary)
+        Text("$kept photos kept out of the cloud · $uploaded uploaded", color = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(12.dp))
 
         SettingRow("Access to your photos",
@@ -378,9 +397,37 @@ fun SettingsScreen(act: MainActivity) {
         HorizontalDivider()
 
         SettingRow("Google account",
-            if (connected) "Connected, so approved photos upload straight to your library."
-            else "Not connected. Photos can't upload until you connect.") {
-            Button(onClick = { act.connectGoogle() }) { Text(if (connected) "Reconnect" else "Connect") }
+            if (connected) "Connected${email?.let { " as $it" } ?: ""}, so approved photos upload straight to your library."
+            else "Not connected. Photos can't upload until you sign in. Sign-in opens Google's page in your browser.") {
+            Button(
+                enabled = clientId.isNotBlank(),
+                onClick = { Store.setClient(c, clientId, clientSecret); act.connectGoogle() },
+            ) { Text(if (connected) "Reconnect" else "Connect") }
+        }
+        if (authError != null) {
+            Text(authError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        if (connected) {
+            TextButton(onClick = { Auth.signOut(c) }) { Text("Disconnect") }
+        } else {
+            Text("From your Google Cloud project (OAuth client of type \"Desktop app\"). See the README.",
+                style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(
+                value = clientId,
+                onValueChange = { clientId = it.trim() },
+                label = { Text("OAuth client ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = clientSecret,
+                onValueChange = { clientSecret = it.trim() },
+                label = { Text("Client secret") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
         }
         HorizontalDivider()
 
@@ -422,6 +469,7 @@ fun SettingsScreen(act: MainActivity) {
             OutlinedButton(onClick = {
                 val i = c.packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
                 if (i != null) c.startActivity(i)
+                else Toast.makeText(c, "Google Photos is not installed", Toast.LENGTH_SHORT).show()
             }) { Text("Open") }
         }
     }

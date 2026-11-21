@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -28,10 +29,12 @@ class WatchService : Service() {
     override fun onCreate() {
         super.onCreate()
         Notifier.channels(this)
-        startForeground(
-            1, Notifier.watching(this),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        )
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(1, Notifier.watching(this), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            // "specialUse" only exists from Android 14
+            startForeground(1, Notifier.watching(this))
+        }
         contentResolver.registerContentObserver(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer
         )

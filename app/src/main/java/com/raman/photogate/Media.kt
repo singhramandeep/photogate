@@ -1,16 +1,14 @@
 package com.raman.photogate
 
-import android.Manifest
 import android.content.Context
 import android.content.ContentUris
-import android.content.pm.PackageManager
 import android.database.Cursor
 import android.graphics.Bitmap
+import android.media.ThumbnailUtils
 import android.net.Uri
-import android.os.Build
 import android.provider.MediaStore
 import android.util.Size
-import androidx.core.content.ContextCompat
+import java.io.File
 
 data class Item(
     val id: Long,
@@ -22,6 +20,8 @@ data class Item(
     val addedMs: Long,
     /** Last write to the file. For a long video this is when recording stopped, not when it started. */
     val modifiedMs: Long = addedMs,
+    /** Real file on disk (readable with All files access). */
+    val file: File? = null,
 )
 
 object Media {
@@ -36,21 +36,11 @@ object Media {
         MediaStore.Files.FileColumns.MEDIA_TYPE,
         MediaStore.Files.FileColumns.DATE_ADDED,
         MediaStore.Files.FileColumns.DATE_MODIFIED,
+        @Suppress("DEPRECATION") MediaStore.Files.FileColumns.DATA,
     )
 
-    /** Runtime permissions to ask for. READ_MEDIA_* only exist from Android 13; 11 and 12 use READ_EXTERNAL_STORAGE. */
-    fun permissions(): Array<String> =
-        if (Build.VERSION.SDK_INT >= 33) arrayOf(
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.READ_MEDIA_VIDEO,
-            Manifest.permission.POST_NOTIFICATIONS,
-        ) else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-
-    fun hasPermission(c: Context): Boolean {
-        val perm = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES
-        else Manifest.permission.READ_EXTERNAL_STORAGE
-        return ContextCompat.checkSelfPermission(c, perm) == PackageManager.PERMISSION_GRANTED
-    }
+    /** All files access covers reading MediaStore and moving the files. */
+    fun hasPermission(@Suppress("UNUSED_PARAMETER") c: Context): Boolean = Gallery.hasAccess()
 
     private fun toItem(cur: Cursor): Item {
         val id = cur.getLong(0)
@@ -66,6 +56,7 @@ object Media {
             mime = cur.getString(3) ?: if (video) "video/mp4" else "image/jpeg",
             addedMs = cur.getLong(5) * 1000L,
             modifiedMs = cur.getLong(6) * 1000L,
+            file = cur.getString(7)?.let { File(it) },
         )
     }
 
@@ -95,14 +86,6 @@ object Media {
     fun byId(c: Context, id: Long): Item? =
         query(c, "${MediaStore.Files.FileColumns._ID} = ?", arrayOf(id.toString())).firstOrNull()
 
-    fun byIds(c: Context, ids: Collection<Long>): List<Item> {
-        if (ids.isEmpty()) return emptyList()
-        // ids are plain longs, safe to inline
-        val inList = ids.toSet().joinToString(",")
-        return query(c, "${MediaStore.Files.FileColumns._ID} IN ($inList)", emptyArray())
-            .sortedByDescending { it.id }
-    }
-
     fun maxId(c: Context): Long {
         c.contentResolver.query(
             FILES, arrayOf(MediaStore.Files.FileColumns._ID), TYPES, null,
@@ -127,8 +110,10 @@ object Media {
         return counts.entries.map { it.key to it.value }.sortedByDescending { it.second }
     }
 
-    fun thumb(c: Context, uri: Uri, px: Int = 400): Bitmap? = try {
-        c.contentResolver.loadThumbnail(uri, Size(px, px), null)
+    /** Thumbnail of a file in staging (not in MediaStore, so straight from the file). */
+    fun thumb(f: File, isVideo: Boolean, px: Int = 400): Bitmap? = try {
+        if (isVideo) ThumbnailUtils.createVideoThumbnail(f, Size(px, px), null)
+        else ThumbnailUtils.createImageThumbnail(f, Size(px, px), null)
     } catch (e: Exception) {
         null
     }

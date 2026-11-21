@@ -1,9 +1,14 @@
 package com.raman.photogate
 
+import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -22,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -36,7 +43,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -47,8 +53,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,22 +65,20 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
 class MainActivity : ComponentActivity() {
 
-    private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            Store.setWatch(this, Store.watch(this)) // refresh screens
-            if (Store.watch(this)) startWatching(this)
-        }
+    private val notifLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { Store.refresh() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,24 +92,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // back from the browser sign-in, or from system settings: refresh screens
-        Store.setWatch(this, Store.watch(this))
-        if (Store.watch(this)) startWatching(this) // also restarts it if a boot start was refused
+        // back from the All files access screen, or from anywhere else: refresh screens
+        Store.refresh()
+        if (Store.watch(this) && Gallery.hasAccess()) startWatching(this) // also restarts a refused boot start
         val app = applicationContext
-        Thread { Processor.scan(app) }.start()
+        Thread {
+            Processor.scan(app)
+            Gallery.sweep(app) // deletions that came due while the phone was off
+        }.start()
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent) // photogate://auth from the sign-in page; onResume refreshes
+    fun askAccess() {
+        try {
+            startActivity(Gallery.accessIntent(this))
+        } catch (e: ActivityNotFoundException) {
+            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
     }
 
-    fun askPermissions() {
-        permissionLauncher.launch(Media.permissions())
-    }
-
-    fun connectGoogle() {
-        Auth.signIn(this)
+    fun askNotifications() {
+        if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     companion object {
@@ -118,6 +126,11 @@ class MainActivity : ComponentActivity() {
         fun stopWatching(c: Context) {
             c.stopService(Intent(c, WatchService::class.java))
         }
+
+        fun hasNotifications(c: Context): Boolean =
+            Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(c, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
     }
 }
 
@@ -151,86 +164,135 @@ fun App(act: MainActivity) {
     }
 }
 
+/** Runs a file action off the main thread (moving a big video can take a moment). */
+@Composable
+private fun rememberRunner(): (suspend () -> Unit) -> Unit {
+    val scope = rememberCoroutineScope()
+    return { block -> scope.launch { withContext(Dispatchers.IO) { block() } } }
+}
+
+private fun timeLeft(ms: Long): String {
+    val min = (ms / 60_000).coerceAtLeast(0)
+    return when {
+        min < 1 -> "under a minute"
+        min < 60 -> "$min min"
+        else -> "${min / 60} h ${min % 60} min"
+    }
+}
+
 // ---------------------------------------------------------------- Pending
 
 @Composable
 fun PendingScreen() {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    var list by remember { mutableStateOf<List<Item>>(emptyList()) }
-    LaunchedEffect(tick) {
-        list = withContext(Dispatchers.IO) { Media.byIds(c, Store.pending(c)) }
+    val run = rememberRunner()
+    val all = remember(tick) { Store.staged(c).sortedByDescending { it.stagedAt } }
+    val waiting = all.filter { !it.discarded }
+    val discarded = all.filter { it.discarded }.sortedBy { it.deleteAt }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
     }
-    val queued = remember(tick) { Store.queued(c).size }
-    val connected = remember(tick) { Store.connected(c) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Pending", style = MaterialTheme.typography.headlineMedium)
-        Text("${list.size} photos undecided", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (queued > 0) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(16.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        item(span = { GridItemSpan(2) }) {
+            Column {
+                Text("Pending", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "$queued approved, waiting to upload" + if (connected) "" else " (connect Google in Settings)",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
+                    "${waiting.size} waiting in staging. Approved ones go to ${Gallery.FOLDER.trimEnd('/')}.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = { Uploader.retryAll(c) }) { Text("Retry now") }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = waiting.isNotEmpty(), onClick = {
+                        run { waiting.forEach { Gallery.approve(c, it.id) } }
+                    }) { Text("Approve all") }
+                    OutlinedButton(enabled = waiting.isNotEmpty(), onClick = {
+                        run { waiting.forEach { Gallery.discard(c, it.id) } }
+                    }) { Text("Discard all") }
+                }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                enabled = list.isNotEmpty(),
-                onClick = {
-                    list.forEach { Uploader.approve(c, it.id); Notifier.cancel(c, it.id) }
-                },
-            ) { Text("Upload all") }
-            OutlinedButton(
-                enabled = list.isNotEmpty(),
-                onClick = {
-                    list.forEach { Store.discard(c, it.id); Notifier.cancel(c, it.id) }
-                },
-            ) { Text("Discard all") }
+        items(waiting, key = { it.id }) { s ->
+            StagedCell(s) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    TextButton(onClick = { run { Gallery.approve(c, s.id) } }) { Text("Approve") }
+                    TextButton(onClick = { run { Gallery.discard(c, s.id) } }) { Text("Discard") }
+                }
+                TextButton(
+                    onClick = { run { Gallery.deleteNow(c, s.id) } },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Delete now", color = MaterialTheme.colorScheme.error) }
+            }
         }
-        Spacer(Modifier.height(8.dp))
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(list, key = { it.id }) { item -> PendingCell(item) }
+        if (discarded.isNotEmpty()) {
+            item(span = { GridItemSpan(2) }) {
+                Column(Modifier.padding(top = 16.dp)) {
+                    Text("Discarded", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "Deleted from the phone when their time is up. Changed your mind? Approve still works.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    TextButton(onClick = { run { discarded.forEach { Gallery.deleteNow(c, it.id) } } }) {
+                        Text("Delete all now", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+            items(discarded, key = { it.id }) { s ->
+                StagedCell(s) {
+                    Text(
+                        "Deleted in " + timeLeft(s.deleteAt - now),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        TextButton(onClick = { run { Gallery.approve(c, s.id) } }) { Text("Approve") }
+                        TextButton(onClick = { run { Gallery.deleteNow(c, s.id) } }) {
+                            Text("Delete now", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-fun PendingCell(item: Item) {
-    val c = LocalContext.current
-    var bmp by remember(item.id) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(item.id) {
-        bmp = withContext(Dispatchers.IO) { Media.thumb(c, item.uri) }
+fun StagedCell(s: Staged, actions: @Composable () -> Unit) {
+    var bmp by remember(s.id) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(s.id) {
+        bmp = withContext(Dispatchers.IO) { Media.thumb(File(s.path), s.isVideo) }
     }
     Card {
         Column {
-            val b = bmp
-            if (b != null) {
-                Image(
-                    bitmap = b.asImageBitmap(),
-                    contentDescription = item.name,
-                    modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Box(Modifier.fillMaxWidth().aspectRatio(1f))
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                TextButton(onClick = { Uploader.approve(c, item.id); Notifier.cancel(c, item.id) }) {
-                    Text("Upload")
+            Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+                val b = bmp
+                if (b != null) {
+                    Image(
+                        bitmap = b.asImageBitmap(),
+                        contentDescription = s.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
                 }
-                TextButton(onClick = { Store.discard(c, item.id); Notifier.cancel(c, item.id) }) {
-                    Text("Discard")
-                }
+                if (s.isVideo) Text("▶ video", Modifier.align(Alignment.BottomStart).padding(6.dp), color = Color.White)
             }
+            Text(
+                Media.label(s.from),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+            )
+            actions()
         }
     }
 }
@@ -245,24 +307,27 @@ fun FoldersScreen() {
     var reload by remember { mutableIntStateOf(0) }
     val hasPerm = remember(tick) { Media.hasPermission(c) }
     LaunchedEffect(reload, hasPerm) {
-        folders = withContext(Dispatchers.IO) { Media.folders(c) }
+        folders = withContext(Dispatchers.IO) {
+            if (hasPerm) Media.folders(c).filter { !it.first.startsWith(Gallery.FOLDER, ignoreCase = true) }
+            else emptyList()
+        }
     }
     val on = remember(tick) { Store.folders(c) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(16.dp))
         Text("Folders", style = MaterialTheme.typography.headlineMedium)
-        Text("Which folders PhotoGate asks about")
+        Text("Which folders PhotoGate catches new photos from")
         Spacer(Modifier.height(8.dp))
         Text(
-            "New photos and videos in the folders you switch on ask before uploading. " +
-                "A folder you add only asks about what arrives from now on. " +
-                "Turn off the same folders in Google Photos' backup, or Google keeps uploading them all.",
+            "New photos and videos in the folders you switch on are moved into PhotoGate's hidden staging folder " +
+                "and wait for your decision. A folder you add only catches what arrives from now on. " +
+                "Careful with chat apps (WhatsApp...): moving their files away breaks them in the chat.",
             style = MaterialTheme.typography.bodySmall,
         )
         TextButton(onClick = { reload++ }) { Text("Refresh folder list") }
         if (folders.isEmpty()) {
-            Text("No folders found. Allow photo access in Settings first.")
+            Text(if (hasPerm) "No folders found." else "Allow All files access in Settings first.")
         }
         LazyColumn {
             items(folders, key = { it.first }) { (path, count) ->
@@ -290,7 +355,7 @@ fun ModesScreen() {
     val tick = Store.tick.intValue
     var choice by remember { mutableStateOf("none") }
     var hours by remember { mutableIntStateOf(8) }
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         // a mode ends on its own; re-check so the screen does not keep saying it is running
         while (true) {
@@ -303,9 +368,8 @@ fun ModesScreen() {
     val running = current != "ask"
 
     val options = listOf(
-        Triple("none", "Don't upload anything", "Photos stay on the phone and never reach the cloud."),
-        Triple("all", "Upload everything", "Stop asking me. Useful on a trip or at an event."),
-        Triple("album", "Everything into a collection", "Each photo goes straight into your PhotoGate album."),
+        Triple("none", "Leave everything alone", "New photos stay where they are. Nothing is staged or approved."),
+        Triple("all", "Approve everything", "Stop asking me. Each photo goes straight to PhotoGate. Useful on a trip."),
     )
     val durations = listOf(2 to "2 hours", 8 to "8 hours", 24 to "1 day", 96 to "4 days", 336 to "14 days")
 
@@ -314,8 +378,8 @@ fun ModesScreen() {
         Spacer(Modifier.height(8.dp))
         if (running) {
             Text(
-                (options.firstOrNull { it.first == current }?.second ?: current) + " until " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                    .format(Date(until)),
+                (options.firstOrNull { it.first == current }?.second ?: current) + " until " +
+                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(until)),
                 style = MaterialTheme.typography.titleMedium,
             )
             OutlinedButton(onClick = { Store.stopMode(c) }) { Text("Stop mode now") }
@@ -362,93 +426,61 @@ fun SettingsScreen(act: MainActivity) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val watch = remember(tick) { Store.watch(c) }
-    val connected = remember(tick) { Store.connected(c) }
-    val albumOn = remember(tick) { Store.albumOn(c) }
     val window = remember(tick) { Store.windowMin(c) }
-    val kept = remember(tick) { Store.discardedCount(c) }
-    var albumName by remember { mutableStateOf(Store.albumNameRaw(c)) }
-    val hasPerm = remember(tick) { Media.hasPermission(c) }
-    val email = remember(tick) { Store.email(c) }
-    val authError = remember(tick) { Store.authError(c) }
-    val uploaded = remember(tick) { Store.uploadedCount(c) }
-    var clientId by remember { mutableStateOf(Store.clientId(c)) }
-    var clientSecret by remember { mutableStateOf(Store.clientSecret(c)) }
+    val deleteAfter = remember(tick) { Store.deleteAfterMin(c) }
+    val approved = remember(tick) { Store.approvedCount(c) }
+    val deleted = remember(tick) { Store.deletedCount(c) }
+    val hasAccess = remember(tick) { Gallery.hasAccess() }
+    val hasNotif = remember(tick) { MainActivity.hasNotifications(c) }
 
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
-        Text("$kept photos kept out of the cloud · $uploaded uploaded", color = MaterialTheme.colorScheme.primary)
+        Text("$approved approved · $deleted deleted", color = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(12.dp))
 
-        SettingRow("Access to your photos",
-            if (hasPerm) "Granted." else "Needed to see what's in your folders.") {
-            if (!hasPerm) Button(onClick = { act.askPermissions() }) { Text("Allow") }
+        SettingRow("All files access",
+            if (hasAccess) "Granted." else "Needed to move new photos into PhotoGate. Opens a system screen: switch it on and come back.") {
+            if (!hasAccess) Button(onClick = { act.askAccess() }) { Text("Allow") }
         }
         HorizontalDivider()
 
-        SettingRow("Watch the camera",
-            "Leaves a permanent notification. That's the price of finding out about a new photo right away.") {
+        if (!hasNotif) {
+            SettingRow("Notifications", "So each new photo can ask Approve / Discard / Delete now.") {
+                Button(onClick = { act.askNotifications() }) { Text("Allow") }
+            }
+            HorizontalDivider()
+        }
+
+        SettingRow("Watch for new photos",
+            "Leaves a permanent notification. That's the price of catching a new photo right away.") {
             Switch(checked = watch, onCheckedChange = {
                 Store.setWatch(c, it)
                 if (it) {
-                    if (!Media.hasPermission(c)) act.askPermissions() else MainActivity.startWatching(c)
+                    if (!Gallery.hasAccess()) act.askAccess() else MainActivity.startWatching(c)
                 } else MainActivity.stopWatching(c)
             })
         }
         HorizontalDivider()
 
-        SettingRow("Google account",
-            if (connected) "Connected${email?.let { " as $it" } ?: ""}, so approved photos upload straight to your library."
-            else "Not connected. Photos can't upload until you sign in. Sign-in opens Google's page in your browser.") {
-            Button(
-                enabled = clientId.isNotBlank(),
-                onClick = { Store.setClient(c, clientId, clientSecret); act.connectGoogle() },
-            ) { Text(if (connected) "Reconnect" else "Connect") }
+        Spacer(Modifier.height(12.dp))
+        Text("DELETE DISCARDED PHOTOS", style = MaterialTheme.typography.labelMedium)
+        Text("How long a discarded photo stays in staging before it is deleted from the phone. Delete now is always there.",
+            style = MaterialTheme.typography.bodySmall)
+        val delays = listOf(0 to "Immediately", 60 to "1 hour", 240 to "4 hours", 480 to "8 hours", 1440 to "24 hours")
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            delays.take(3).forEach { (m, label) ->
+                FilterChip(selected = deleteAfter == m, onClick = { Store.setDeleteAfterMin(c, m) }, label = { Text(label) })
+            }
         }
-        if (authError != null) {
-            Text(authError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            delays.drop(3).forEach { (m, label) ->
+                FilterChip(selected = deleteAfter == m, onClick = { Store.setDeleteAfterMin(c, m) }, label = { Text(label) })
+            }
         }
-        if (connected) {
-            TextButton(onClick = { Auth.signOut(c) }) { Text("Disconnect") }
-        } else {
-            Text("From your Google Cloud project (OAuth client of type \"Desktop app\"). See the README.",
-                style = MaterialTheme.typography.bodySmall)
-            OutlinedTextField(
-                value = clientId,
-                onValueChange = { clientId = it.trim() },
-                label = { Text("OAuth client ID") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = clientSecret,
-                onValueChange = { clientSecret = it.trim() },
-                label = { Text("Client secret") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(12.dp))
-        }
-        HorizontalDivider()
-
-        SettingRow("Collection",
-            "Send approved photos into a Google Photos album created by this app.") {
-            Switch(checked = albumOn, onCheckedChange = { Store.setAlbumOn(c, it) })
-        }
-        if (albumOn) {
-            OutlinedTextField(
-                value = albumName,
-                onValueChange = { albumName = it; Store.setAlbumName(c, it) },
-                label = { Text("Album name") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        HorizontalDivider()
 
         Spacer(Modifier.height(12.dp))
         Text("DECISION WINDOW", style = MaterialTheme.typography.labelMedium)
-        Text("Only photos taken within this window are offered. Anything older stays on the phone without being uploaded.",
+        Text("Only photos taken within this window are caught. Anything older stays where it is.",
             style = MaterialTheme.typography.bodySmall)
         val windows = listOf(1 to "1 minute", 5 to "5 minutes", 15 to "15 minutes", 60 to "60 minutes", 0 to "No limit")
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -464,8 +496,9 @@ fun SettingsScreen(act: MainActivity) {
 
         Spacer(Modifier.height(16.dp))
         HorizontalDivider()
-        SettingRow("Turn off Google Photos' own backup",
-            "While it stays on, Google Photos uploads your whole camera roll no matter what you decide here.") {
+        SettingRow("Back up only PhotoGate",
+            "In Google Photos: Settings > Backup > Back up device folders, switch on PhotoGate. " +
+                "The folder appears there after your first approved photo.") {
             OutlinedButton(onClick = {
                 val i = c.packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
                 if (i != null) c.startActivity(i)

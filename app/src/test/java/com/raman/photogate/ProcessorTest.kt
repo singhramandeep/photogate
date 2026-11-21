@@ -10,28 +10,35 @@ class ProcessorTest {
 
     private class I(val folder: String, val added: Long, val modified: Long)
 
-    private fun item(folder: String = cam, addedAgoMs: Long = 2_000, modifiedAgoMs: Long = addedAgoMs) =
+    private fun item(folder: String = cam, addedAgoMs: Long = 10_000, modifiedAgoMs: Long = addedAgoMs) =
         I(folder, now - addedAgoMs, now - modifiedAgoMs)
 
-    private fun decide(i: I, mode: String = "ask", albumOn: Boolean = false, windowMin: Int = 0) =
-        Processor.decide(i.folder, i.added, i.modified, setOf(cam), mode, albumOn, windowMin * 60_000L, now)
+    private fun decide(i: I, mode: String = "ask", windowMin: Int = 0, folders: Set<String> = setOf(cam)) =
+        Processor.decide(i.folder, i.added, i.modified, folders, mode, windowMin * 60_000L, now)
 
-    @Test fun asksForWatchedFolder() = assertEquals(Action.ASK, decide(item()))
+    @Test fun stagesNewPhotoInWatchedFolder() = assertEquals(Action.STAGE, decide(item()))
     @Test fun skipsOtherFolders() = assertEquals(Action.SKIP, decide(item(folder = "Pictures/Screenshots/")))
-    @Test fun noneModeKeepsOnPhone() = assertEquals(Action.SKIP, decide(item(), mode = "none"))
-    @Test fun allModeUploads() = assertEquals(Action.UPLOAD, decide(item(), mode = "all"))
-    @Test fun allModeRespectsCollectionSwitch() = assertEquals(Action.UPLOAD_ALBUM, decide(item(), mode = "all", albumOn = true))
-    @Test fun albumModeAlwaysAlbum() = assertEquals(Action.UPLOAD_ALBUM, decide(item(), mode = "album"))
+    @Test fun noneModeLeavesItAlone() = assertEquals(Action.SKIP, decide(item(), mode = "none"))
+    @Test fun allModeApprovesStraightAway() = assertEquals(Action.APPROVE, decide(item(), mode = "all"))
+
+    @Test fun neverTouchesItsOwnFolder() {
+        val all = setOf(cam, Gallery.FOLDER, Gallery.FOLDER + ".staging/")
+        assertEquals(Action.SKIP, decide(item(folder = Gallery.FOLDER), folders = all))
+        assertEquals(Action.SKIP, decide(item(folder = Gallery.FOLDER + ".staging/"), folders = all))
+        assertEquals(Action.SKIP, decide(item(folder = "dcim/photogate/"), folders = all + "dcim/photogate/"))
+    }
+
+    @Test fun waitsWhileCameraIsStillWriting() =
+        assertEquals(Action.WAIT, decide(item(addedAgoMs = 1_000)))
 
     @Test fun windowSkipsOldArrivals() =
         assertEquals(Action.SKIP, decide(item(addedAgoMs = 10 * 60_000), windowMin = 5))
 
     @Test fun windowKeepsFreshArrivals() =
-        assertEquals(Action.ASK, decide(item(addedAgoMs = 60_000), windowMin = 5))
+        assertEquals(Action.STAGE, decide(item(addedAgoMs = 60_000), windowMin = 5))
 
     @Test fun longVideoCountsFromWhenRecordingStopped() =
-        // added 20 min ago when recording began, finished 30 s ago
-        assertEquals(Action.ASK, decide(item(addedAgoMs = 20 * 60_000, modifiedAgoMs = 30_000), windowMin = 1))
+        assertEquals(Action.STAGE, decide(item(addedAgoMs = 20 * 60_000, modifiedAgoMs = 30_000), windowMin = 1))
 
     @Test fun pruneDropsOnlyEntriesOlderThanLookbackTwice() {
         val nowSec = now / 1000

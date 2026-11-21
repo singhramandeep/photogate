@@ -14,9 +14,9 @@ object Notifier {
     const val CH_ASK = "ask"
     const val ACTION_UPLOAD = "com.raman.photogate.UPLOAD"
     const val ACTION_DISCARD = "com.raman.photogate.DISCARD"
+    const val ACTION_DELETE = "com.raman.photogate.DELETE"
     private const val GROUP = "photogate_group"
     private const val SUMMARY_ID = 2
-    private const val SIGN_IN_ID = 3
 
     /** Per-photo notification id. Offset so a low MediaStore id never collides with 1 (watcher), 2, 3. */
     fun idFor(mediaId: Long): Int = (mediaId % 1_000_000_000L).toInt() + 1000
@@ -28,7 +28,7 @@ object Notifier {
         )
         // LOW = no sound, no pop-over; it waits in the shade
         nm.createNotificationChannel(
-            NotificationChannel(CH_ASK, "Upload or discard", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CH_ASK, "Approve or discard", NotificationManager.IMPORTANCE_LOW)
         )
     }
 
@@ -42,7 +42,7 @@ object Notifier {
         NotificationCompat.Builder(c, CH_WATCH)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("PhotoGate is watching for new photos")
-            .setContentText("Photos stay on your phone until you approve them")
+            .setContentText("New photos wait in PhotoGate until you approve them")
             .setOngoing(true)
             .setContentIntent(openApp(c))
             .build()
@@ -54,20 +54,21 @@ object Notifier {
         )
     }
 
-    fun postAsk(c: Context, item: Item) {
+    fun postAsk(c: Context, item: Staged) {
         channels(c)
-        val bmp = Media.thumb(c, item.uri, 600)
+        val bmp = Media.thumb(java.io.File(item.path), item.isVideo, 600)
         val kind = if (item.isVideo) "video" else "photo"
         val b = NotificationCompat.Builder(c, CH_ASK)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Upload this $kind?")
-            .setContentText(Media.label(item.folder))
+            .setContentTitle("Keep this $kind?")
+            .setContentText("From ${Media.label(item.from)}")
             .setGroup(GROUP)
             .setAutoCancel(true)
             .setSilent(true)
             .setContentIntent(openApp(c))
-            .addAction(0, "Upload", action(c, ACTION_UPLOAD, item.id))
+            .addAction(0, "Approve", action(c, ACTION_UPLOAD, item.id))
             .addAction(0, "Discard", action(c, ACTION_DISCARD, item.id))
+            .addAction(0, "Delete now", action(c, ACTION_DELETE, item.id))
         if (bmp != null) {
             b.setLargeIcon(bmp)
             b.setStyle(NotificationCompat.BigPictureStyle().bigPicture(bmp))
@@ -95,20 +96,5 @@ object Notifier {
         val nm = c.getSystemService(NotificationManager::class.java)
         val left = nm.activeNotifications.any { it.notification.group == GROUP && it.id != SUMMARY_ID }
         if (!left) nm.cancel(SUMMARY_ID)
-    }
-
-    fun needSignIn(c: Context) {
-        channels(c)
-        val n = NotificationCompat.Builder(c, CH_ASK)
-            .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Connect Google Photos")
-            .setContentText("Open PhotoGate > Settings and connect your Google account")
-            .setAutoCancel(true)
-            .setContentIntent(openApp(c))
-            .build()
-        try {
-            NotificationManagerCompat.from(c).notify(SIGN_IN_ID, n)
-        } catch (e: SecurityException) {
-        }
     }
 }

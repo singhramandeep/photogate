@@ -14,8 +14,11 @@ import android.provider.MediaStore
 class WatchService : Service() {
     private val handler = Handler(Looper.getMainLooper())
 
-    private val scanNow = Runnable {
-        Thread { Processor.scan(applicationContext) }.start()
+    private val scanNow: Runnable = Runnable {
+        Thread {
+            // a file still being written is looked at again shortly
+            if (Processor.scan(applicationContext)) handler.postDelayed(scanNow, Processor.SETTLE_MS + 500)
+        }.start()
     }
 
     private val observer = object : ContentObserver(handler) {

@@ -42,7 +42,7 @@ object Notifier {
         NotificationCompat.Builder(c, CH_WATCH)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("PhotoGate is watching for new photos")
-            .setContentText("New photos wait in PhotoGate until you approve them")
+            .setContentText("New photos stay where they are until you decide")
             .setOngoing(true)
             .setContentIntent(openApp(c))
             .build()
@@ -54,14 +54,14 @@ object Notifier {
         )
     }
 
-    fun postAsk(c: Context, item: Staged) {
+    fun postAsk(c: Context, item: Photo) {
         channels(c)
         val bmp = Media.thumb(java.io.File(item.path), item.isVideo, 600)
         val kind = if (item.isVideo) "video" else "photo"
         val b = NotificationCompat.Builder(c, CH_ASK)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Keep this $kind?")
-            .setContentText("From ${Media.label(item.from)}")
+            .setContentTitle("Send this $kind to PhotoGate?")
+            .setContentText("In ${Media.label(item.from)}")
             .setGroup(GROUP)
             .setAutoCancel(true)
             .setSilent(true)

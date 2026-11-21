@@ -26,38 +26,32 @@ class GateTest {
     }
 
     @Test
-    fun stagingIsHiddenFromGalleries() {
-        val (_, gate) = phone()
-        gate.ensureDirs()
-        assertTrue(gate.staging.name.startsWith("."))
-        assertTrue(File(gate.staging, ".nomedia").exists())
-        assertEquals(gate.root, gate.staging.parentFile)
+    fun approveCopiesAndOriginalStaysInItsFolder() {
+        val (sd, gate) = phone()
+        val bytes = ByteArray(300_000) { (it % 251).toByte() }
+        val original = photo(File(sd, "DCIM/Camera"), "IMG_1.jpg", bytes)
+
+        val copy = gate.approve(original)
+        assertTrue("original untouched", original.exists())
+        assertArrayEquals(bytes, original.readBytes())
+        assertEquals(File(sd, "DCIM/PhotoGate/IMG_1.jpg"), copy)
+        assertArrayEquals(bytes, copy.readBytes())
+        assertEquals("photo date is kept", 1_700_000_000_000L, copy.lastModified())
     }
 
     @Test
-    fun newPhotoLeavesCameraThenApprovedLandsInPhotoGate() {
+    fun noHiddenFolderIsCreated() {
         val (sd, gate) = phone()
-        val cam = File(sd, "DCIM/Camera")
-        val bytes = ByteArray(300_000) { (it % 251).toByte() }
-        val src = photo(cam, "IMG_1.jpg", bytes)
-
-        val staged = gate.stage(src)
-        assertFalse("left the camera folder", src.exists())
-        assertEquals(gate.staging, staged.parentFile)
-        assertArrayEquals(bytes, staged.readBytes())
-
-        val approved = gate.approve(staged)
-        assertFalse(staged.exists())
-        assertEquals(File(sd, "DCIM/PhotoGate/IMG_1.jpg"), approved)
-        assertArrayEquals(bytes, approved.readBytes())
-        assertEquals("photo date is kept", 1_700_000_000_000L, approved.lastModified())
+        gate.approve(photo(File(sd, "DCIM/Camera"), "a.jpg"))
+        assertFalse(gate.oldStaging.exists())
+        assertEquals(listOf("a.jpg"), gate.root.list()!!.toList())
     }
 
     @Test
     fun sameNameNeverOverwrites() {
         val (sd, gate) = phone()
-        val a = gate.approve(gate.stage(photo(File(sd, "DCIM/Camera"), "IMG.jpg", "first".toByteArray())))
-        val b = gate.approve(gate.stage(photo(File(sd, "Pictures/Screenshots"), "IMG.jpg", "second".toByteArray())))
+        val a = gate.approve(photo(File(sd, "DCIM/Camera"), "IMG.jpg", "first".toByteArray()))
+        val b = gate.approve(photo(File(sd, "Pictures/Screenshots"), "IMG.jpg", "second".toByteArray()))
         assertEquals("IMG.jpg", a.name)
         assertEquals("IMG (1).jpg", b.name)
         assertEquals("first", a.readText())
@@ -74,35 +68,47 @@ class GateTest {
     }
 
     @Test
-    fun deleteRemovesStagedFile() {
+    fun deleteRemovesOriginal() {
         val (sd, gate) = phone()
-        val s = gate.stage(photo(File(sd, "DCIM/Camera"), "x.jpg"))
-        assertTrue(gate.delete(s))
-        assertFalse(s.exists())
-        assertTrue("already gone counts as deleted", gate.delete(s))
+        val f = photo(File(sd, "DCIM/Camera"), "x.jpg")
+        assertTrue(gate.delete(f))
+        assertFalse(f.exists())
+        assertTrue("already gone counts as deleted", gate.delete(f))
     }
 
     @Test(expected = IOException::class)
-    fun missingSourceIsAnError() {
+    fun missingOriginalIsAnError() {
         val (sd, gate) = phone()
-        gate.stage(File(sd, "DCIM/Camera/nope.jpg"))
+        gate.approve(File(sd, "DCIM/Camera/nope.jpg"))
     }
 
     @Test
-    fun stagedSurvivesJsonRoundTrip() {
-        val s = Staged(7, "/sd/DCIM/PhotoGate/.staging/a.jpg", "a.jpg", "DCIM/Camera/", true, 123, 456)
-        assertEquals(s, Staged.fromJson(s.toJson()))
+    fun oldStagedPhotoGoesBackToItsFolder() {
+        val (sd, gate) = phone()
+        val staged = photo(gate.oldStaging, "IMG_9.jpg", "data".toByteArray())
+        photo(File(sd, "DCIM/Camera"), "IMG_9.jpg", "other".toByteArray()) // a clash in the original folder
+        val back = Gate.move(staged, Gate.unique(File(sd, "DCIM/Camera"), "IMG_9.jpg"))
+        assertFalse(staged.exists())
+        assertEquals(File(sd, "DCIM/Camera/IMG_9 (1).jpg"), back)
+        assertEquals("data", back.readText())
+        assertEquals(1_700_000_000_000L, back.lastModified())
+    }
+
+    @Test
+    fun photoSurvivesJsonRoundTrip() {
+        val p = Photo(7, "/sd/DCIM/Camera/a.jpg", "a.jpg", "DCIM/Camera/", true, 123, 456)
+        assertEquals(p, Photo.fromJson(p.toJson()))
     }
 
     @Test
     fun dueAndNextDeletion() {
-        val waiting = Staged(1, "p", "a", "f", false, 0)
+        val waiting = Photo(1, "p", "a", "f", false, 0)
         val soon = waiting.copy(id = 2, deleteAt = 1_000)
         val later = waiting.copy(id = 3, deleteAt = 5_000)
         val list = listOf(waiting, soon, later)
         assertEquals(listOf(soon), Gate.due(list, 2_000))
         assertEquals(listOf(soon, later), Gate.due(list, 5_000))
-        assertEquals("waiting photos are never deleted", emptyList<Staged>(), Gate.due(listOf(waiting), Long.MAX_VALUE))
+        assertEquals("waiting photos are never deleted", emptyList<Photo>(), Gate.due(listOf(waiting), Long.MAX_VALUE))
         assertEquals(1_000L, Gate.nextDue(list))
         assertNull(Gate.nextDue(listOf(waiting)))
     }

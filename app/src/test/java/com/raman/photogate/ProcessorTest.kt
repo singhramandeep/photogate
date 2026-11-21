@@ -16,9 +16,9 @@ class ProcessorTest {
     private fun decide(i: I, mode: String = "ask", windowMin: Int = 0, folders: Set<String> = setOf(cam)) =
         Processor.decide(i.folder, i.added, i.modified, folders, mode, windowMin * 60_000L, now)
 
-    @Test fun stagesNewPhotoInWatchedFolder() = assertEquals(Action.STAGE, decide(item()))
+    @Test fun asksAboutNewPhotoInWatchedFolder() = assertEquals(Action.ASK, decide(item()))
     @Test fun skipsOtherFolders() = assertEquals(Action.SKIP, decide(item(folder = "Pictures/Screenshots/")))
-    @Test fun noneModeLeavesItAlone() = assertEquals(Action.SKIP, decide(item(), mode = "none"))
+    @Test fun noneModeDoesNothing() = assertEquals(Action.SKIP, decide(item(), mode = "none"))
     @Test fun allModeApprovesStraightAway() = assertEquals(Action.APPROVE, decide(item(), mode = "all"))
 
     @Test fun neverTouchesItsOwnFolder() {
@@ -35,10 +35,10 @@ class ProcessorTest {
         assertEquals(Action.SKIP, decide(item(addedAgoMs = 10 * 60_000), windowMin = 5))
 
     @Test fun windowKeepsFreshArrivals() =
-        assertEquals(Action.STAGE, decide(item(addedAgoMs = 60_000), windowMin = 5))
+        assertEquals(Action.ASK, decide(item(addedAgoMs = 60_000), windowMin = 5))
 
     @Test fun longVideoCountsFromWhenRecordingStopped() =
-        assertEquals(Action.STAGE, decide(item(addedAgoMs = 20 * 60_000, modifiedAgoMs = 30_000), windowMin = 1))
+        assertEquals(Action.ASK, decide(item(addedAgoMs = 20 * 60_000, modifiedAgoMs = 30_000), windowMin = 1))
 
     @Test fun pruneDropsOnlyEntriesOlderThanLookbackTwice() {
         val nowSec = now / 1000

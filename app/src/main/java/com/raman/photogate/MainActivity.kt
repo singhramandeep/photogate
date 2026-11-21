@@ -187,7 +187,7 @@ fun PendingScreen() {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val run = rememberRunner()
-    val all = remember(tick) { Store.staged(c).sortedByDescending { it.stagedAt } }
+    val all = remember(tick) { Store.staged(c).sortedByDescending { it.seenAt } }
     val waiting = all.filter { !it.discarded }
     val discarded = all.filter { it.discarded }.sortedBy { it.deleteAt }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -209,7 +209,7 @@ fun PendingScreen() {
             Column {
                 Text("Pending", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "${waiting.size} waiting in staging. Approved ones go to ${Gallery.FOLDER.trimEnd('/')}.",
+                    "${waiting.size} waiting. They stay in their folders; Approve puts a copy in ${Gallery.FOLDER.trimEnd('/')}.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -240,7 +240,7 @@ fun PendingScreen() {
                 Column(Modifier.padding(top = 16.dp)) {
                     Text("Discarded", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Deleted from the phone when their time is up. Changed your mind? Approve still works.",
+                        "Deleted from their folder when their time is up. Changed your mind? Approve still works.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     TextButton(onClick = { run { discarded.forEach { Gallery.deleteNow(c, it.id) } } }) {
@@ -268,7 +268,7 @@ fun PendingScreen() {
 }
 
 @Composable
-fun StagedCell(s: Staged, actions: @Composable () -> Unit) {
+fun StagedCell(s: Photo, actions: @Composable () -> Unit) {
     var bmp by remember(s.id) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(s.id) {
         bmp = withContext(Dispatchers.IO) { Media.thumb(File(s.path), s.isVideo) }
@@ -320,9 +320,9 @@ fun FoldersScreen() {
         Text("Which folders PhotoGate catches new photos from")
         Spacer(Modifier.height(8.dp))
         Text(
-            "New photos and videos in the folders you switch on are moved into PhotoGate's hidden staging folder " +
-                "and wait for your decision. A folder you add only catches what arrives from now on. " +
-                "Careful with chat apps (WhatsApp...): moving their files away breaks them in the chat.",
+            "New photos and videos in the folders you switch on ask for a decision. They stay in their folder: " +
+                "Approve copies them to PhotoGate, Discard deletes them. " +
+                "A folder you add only asks about what arrives from now on.",
             style = MaterialTheme.typography.bodySmall,
         )
         TextButton(onClick = { reload++ }) { Text("Refresh folder list") }
@@ -368,8 +368,8 @@ fun ModesScreen() {
     val running = current != "ask"
 
     val options = listOf(
-        Triple("none", "Leave everything alone", "New photos stay where they are. Nothing is staged or approved."),
-        Triple("all", "Approve everything", "Stop asking me. Each photo goes straight to PhotoGate. Useful on a trip."),
+        Triple("none", "Don't ask", "New photos stay where they are and nothing is copied or deleted."),
+        Triple("all", "Approve everything", "Stop asking me. Each photo is copied to PhotoGate. Useful on a trip."),
     )
     val durations = listOf(2 to "2 hours", 8 to "8 hours", 24 to "1 day", 96 to "4 days", 336 to "14 days")
 
@@ -439,7 +439,7 @@ fun SettingsScreen(act: MainActivity) {
         Spacer(Modifier.height(12.dp))
 
         SettingRow("All files access",
-            if (hasAccess) "Granted." else "Needed to move new photos into PhotoGate. Opens a system screen: switch it on and come back.") {
+            if (hasAccess) "Granted." else "Needed to see new photos, copy them and delete discarded ones. Opens a system screen: switch it on and come back.") {
             if (!hasAccess) Button(onClick = { act.askAccess() }) { Text("Allow") }
         }
         HorizontalDivider()
@@ -464,7 +464,7 @@ fun SettingsScreen(act: MainActivity) {
 
         Spacer(Modifier.height(12.dp))
         Text("DELETE DISCARDED PHOTOS", style = MaterialTheme.typography.labelMedium)
-        Text("How long a discarded photo stays in staging before it is deleted from the phone. Delete now is always there.",
+        Text("How long a discarded photo stays in its folder before it is deleted from the phone. Delete now is always there.",
             style = MaterialTheme.typography.bodySmall)
         val delays = listOf(0 to "Immediately", 60 to "1 hour", 240 to "4 hours", 480 to "8 hours", 1440 to "24 hours")
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -480,7 +480,7 @@ fun SettingsScreen(act: MainActivity) {
 
         Spacer(Modifier.height(12.dp))
         Text("DECISION WINDOW", style = MaterialTheme.typography.labelMedium)
-        Text("Only photos taken within this window are caught. Anything older stays where it is.",
+        Text("Only photos taken within this window ask. Anything older is left alone.",
             style = MaterialTheme.typography.bodySmall)
         val windows = listOf(1 to "1 minute", 5 to "5 minutes", 15 to "15 minutes", 60 to "60 minutes", 0 to "No limit")
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

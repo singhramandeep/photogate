@@ -1,10 +1,12 @@
 package com.raman.photogate
 
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -15,14 +17,19 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** What PhotoGate does with files: stage, approve, discard, delete. Android side of [Gate]. */
+/**
+ * What PhotoGate does with files. Photos always stay in their original folder:
+ * Approve copies one into DCIM/PhotoGate, Discard deletes the original after a delay, Delete now deletes it at once.
+ */
 object Gallery {
     /** RELATIVE_PATH of the approved folder. Turn on backup for this folder in Google Photos. */
     const val FOLDER = "DCIM/PhotoGate/"
 
-    fun gate(): Gate = Gate(File(Environment.getExternalStorageDirectory(), FOLDER.trimEnd('/')))
+    private val sdcard: File get() = Environment.getExternalStorageDirectory()
 
-    /** Moving other apps' photos needs "All files access" (a one-time switch in system settings). */
+    fun gate(): Gate = Gate(File(sdcard, FOLDER.trimEnd('/')))
+
+    /** Deleting other apps' photos without a prompt each time needs "All files access" (one switch in settings). */
     fun hasAccess(): Boolean = Environment.isExternalStorageManager()
 
     fun accessIntent(c: Context): Intent =
@@ -33,25 +40,19 @@ object Gallery {
         MediaScannerConnection.scanFile(c.applicationContext, arrayOf(*paths), null, null)
     }
 
-    /** A new photo leaves its folder and waits in staging. Null if it could not be moved. */
-    fun stage(c: Context, item: Item): Staged? {
-        val src = item.file ?: return null
-        return try {
-            val dst = gate().stage(src)
-            rescan(c, src.path, dst.path)
-            Staged(item.id, dst.path, dst.name, item.folder, item.isVideo, System.currentTimeMillis())
-                .also { Store.addStaged(c, it) }
-        } catch (e: IOException) {
-            null
-        }
+    /** Starts tracking a new photo. Nothing happens to the file. */
+    fun track(c: Context, item: Item): Photo? {
+        val f = item.file ?: return null
+        return Photo(item.id, f.path, f.name, item.folder, item.isVideo, System.currentTimeMillis())
+            .also { Store.addStaged(c, it) }
     }
 
-    /** "Upload everything" mode: straight into PhotoGate, no staging. */
+    /** "Approve everything" mode: copy straight into PhotoGate. */
     fun approveDirect(c: Context, item: Item): Boolean {
         val src = item.file ?: return false
         return try {
             val dst = gate().approve(src)
-            rescan(c, src.path, dst.path)
+            rescan(c, dst.path)
             Store.countApproved(c)
             true
         } catch (e: IOException) {
@@ -60,37 +61,43 @@ object Gallery {
     }
 
     fun approve(c: Context, id: Long): Boolean {
-        val s = Store.stagedById(c, id) ?: return false
+        val p = Store.stagedById(c, id) ?: return false
         Notifier.cancel(c, id)
         return try {
-            val dst = gate().approve(File(s.path))
+            val dst = gate().approve(File(p.path))
             Store.removeStaged(c, id)
             rescan(c, dst.path)
             Store.countApproved(c)
             true
         } catch (e: IOException) {
-            if (!File(s.path).exists()) Store.removeStaged(c, id) // gone already, forget it
+            if (!File(p.path).exists()) Store.removeStaged(c, id) // original is gone, forget it
             false
         }
     }
 
-    /** Keeps the photo in staging until the delete delay is over (0 = delete right away). */
+    /** The original is deleted when the delay set in Settings is over (0 = right away). */
     fun discard(c: Context, id: Long) {
-        val s = Store.stagedById(c, id) ?: return
+        val p = Store.stagedById(c, id) ?: return
         Notifier.cancel(c, id)
         val delayMs = Store.deleteAfterMin(c) * 60_000L
         if (delayMs <= 0) {
             deleteNow(c, id)
             return
         }
-        Store.updateStaged(c, s.copy(deleteAt = System.currentTimeMillis() + delayMs))
+        Store.updateStaged(c, p.copy(deleteAt = System.currentTimeMillis() + delayMs))
         scheduleSweep(c)
     }
 
+    /** Deletes the original from its folder. */
     fun deleteNow(c: Context, id: Long) {
-        val s = Store.stagedById(c, id) ?: return
+        val p = Store.stagedById(c, id) ?: return
         Notifier.cancel(c, id)
-        if (gate().delete(File(s.path))) {
+        val f = File(p.path)
+        val base = if (p.isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        // through MediaStore so galleries update at once; plain file delete as a fallback
+        runCatching { c.contentResolver.delete(ContentUris.withAppendedId(base, p.id), null, null) }
+        if (gate().delete(f)) {
+            rescan(c, f.path)
             Store.removeStaged(c, id)
             Store.countDeleted(c)
         }
@@ -99,9 +106,10 @@ object Gallery {
     /** Deletes discarded photos whose time is up and schedules the next run. */
     @Synchronized
     fun sweep(c: Context) {
+        restoreOldStaging(c)
         val list = Store.staged(c)
         Gate.due(list, System.currentTimeMillis()).forEach { deleteNow(c, it.id) }
-        // forget entries whose file vanished (deleted by hand, say)
+        // forget photos whose original vanished (deleted or moved by hand)
         list.filter { !File(it.path).exists() }.forEach { Store.removeStaged(c, it.id) }
         scheduleSweep(c)
     }
@@ -111,6 +119,32 @@ object Gallery {
         val delay = (next - System.currentTimeMillis()).coerceAtLeast(0L)
         val req = OneTimeWorkRequestBuilder<SweepWorker>().setInitialDelay(delay, TimeUnit.MILLISECONDS).build()
         WorkManager.getInstance(c.applicationContext).enqueueUniqueWork("sweep", ExistingWorkPolicy.REPLACE, req)
+    }
+
+    /**
+     * The previous version moved waiting photos into DCIM/PhotoGate/.staging. Put each one back into the folder it
+     * came from, keep its state (waiting or discarded), and remove the hidden folder once it is empty.
+     */
+    private fun restoreOldStaging(c: Context) {
+        val staging = gate().oldStaging
+        if (!staging.isDirectory) return
+        val known = Store.staged(c).associateBy { it.path }
+        staging.listFiles()?.filter { it.isFile && it.name != ".nomedia" }?.forEach { f ->
+            val p = known[f.path]
+            val folder = File(sdcard, (p?.from ?: "DCIM/Camera/").trimEnd('/'))
+            try {
+                val back = Gate.move(f, Gate.unique(folder, p?.name ?: f.name))
+                rescan(c, back.path)
+                if (p != null) Store.updateStaged(c, p.copy(path = back.path, name = back.name))
+            } catch (e: IOException) {
+                // leave it; tried again on the next sweep
+            }
+        }
+        val left = staging.listFiles()?.filter { it.name != ".nomedia" }.orEmpty()
+        if (left.isEmpty()) {
+            File(staging, ".nomedia").delete()
+            staging.delete()
+        }
     }
 }
 

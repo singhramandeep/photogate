@@ -4,30 +4,33 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 
-/** One file in the staging folder. [deleteAt] is 0 while it waits for a decision, else when it gets deleted. */
-data class Staged(
-    val id: Long, // MediaStore id it had in its original folder
-    val path: String, // absolute path inside the staging folder
+/**
+ * A new photo PhotoGate is tracking. The file stays in its original folder the whole time.
+ * [deleteAt] is 0 while it waits for a decision, else when the original gets deleted (it was discarded).
+ */
+data class Photo(
+    val id: Long, // MediaStore id
+    val path: String, // absolute path of the original file
     val name: String,
-    val from: String, // original RELATIVE_PATH, e.g. "DCIM/Camera/"
+    val from: String, // RELATIVE_PATH of its folder, e.g. "DCIM/Camera/"
     val isVideo: Boolean,
-    val stagedAt: Long,
+    val seenAt: Long,
     val deleteAt: Long = 0L,
 ) {
     val discarded: Boolean get() = deleteAt > 0
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("path", path).put("name", name).put("from", from)
-        .put("video", isVideo).put("at", stagedAt).put("deleteAt", deleteAt)
+        .put("video", isVideo).put("at", seenAt).put("deleteAt", deleteAt)
 
     companion object {
-        fun fromJson(j: JSONObject) = Staged(
+        fun fromJson(j: JSONObject) = Photo(
             id = j.getLong("id"),
             path = j.getString("path"),
             name = j.getString("name"),
             from = j.optString("from"),
             isVideo = j.optBoolean("video"),
-            stagedAt = j.optLong("at"),
+            seenAt = j.optLong("at"),
             deleteAt = j.optLong("deleteAt"),
         )
     }
@@ -35,33 +38,23 @@ data class Staged(
 
 /**
  * Plain file operations behind PhotoGate (no Android APIs, so they are unit tested with real files).
- *
- *   <root>/            = DCIM/PhotoGate: approved photos. A normal device folder that Google Photos can back up.
- *   <root>/.staging/   = waiting and discarded photos. Hidden and marked .nomedia, so galleries and Google Photos
- *                        never see what is in it.
+ * [root] is DCIM/PhotoGate: copies of approved photos, a normal device folder that Google Photos can back up.
  */
 class Gate(val root: File) {
-    val staging = File(root, ".staging")
+    /** Where an earlier version kept photos while waiting. Only used to put them back. */
+    val oldStaging = File(root, ".staging")
 
     fun ensureDirs() {
-        if (!staging.isDirectory && !staging.mkdirs()) throw IOException("Cannot create $staging")
-        val nomedia = File(staging, ".nomedia")
-        if (!nomedia.exists()) nomedia.createNewFile()
+        if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create $root")
     }
 
-    /** Moves a new photo out of its folder into staging. Returns where it now is. */
-    fun stage(src: File): File {
-        ensureDirs()
-        return move(src, unique(staging, src.name))
-    }
-
-    /** Moves a photo (staged, or straight from its folder) into the approved folder. */
+    /** Copies an approved photo into PhotoGate. The original stays where it is. */
     fun approve(src: File): File {
         ensureDirs()
-        return move(src, unique(root, src.name))
+        return copy(src, unique(root, src.name))
     }
 
-    /** Deletes a staged photo. True if it is gone (also when it was already gone). */
+    /** Deletes a file. True if it is gone (also when it was already gone). */
     fun delete(f: File): Boolean = !f.exists() || f.delete()
 
     companion object {
@@ -79,11 +72,9 @@ class Gate(val root: File) {
             }
         }
 
-        /** Rename when possible (instant), else copy and delete. The file's date is kept either way. */
-        fun move(src: File, dst: File): File {
+        /** Copy that keeps the file's date and never leaves a half-written file behind. */
+        fun copy(src: File, dst: File): File {
             if (!src.isFile) throw IOException("Missing $src")
-            if (src.renameTo(dst)) return dst
-            val time = src.lastModified()
             try {
                 src.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
             } catch (e: IOException) {
@@ -94,19 +85,27 @@ class Gate(val root: File) {
                 dst.delete()
                 throw IOException("Copy of $src is incomplete")
             }
-            dst.setLastModified(time)
+            dst.setLastModified(src.lastModified())
+            return dst
+        }
+
+        /** Rename when possible, else copy and delete. Used only to put old staged files back. */
+        fun move(src: File, dst: File): File {
+            if (!src.isFile) throw IOException("Missing $src")
+            dst.parentFile?.mkdirs()
+            if (src.renameTo(dst)) return dst
+            copy(src, dst)
             if (!src.delete()) {
-                // keep exactly one copy
                 dst.delete()
                 throw IOException("Cannot remove $src")
             }
             return dst
         }
 
-        /** Discarded files whose time is up. */
-        fun due(list: List<Staged>, nowMs: Long): List<Staged> = list.filter { it.discarded && it.deleteAt <= nowMs }
+        /** Discarded photos whose time is up. */
+        fun due(list: List<Photo>, nowMs: Long): List<Photo> = list.filter { it.discarded && it.deleteAt <= nowMs }
 
         /** Earliest future deletion, or null. */
-        fun nextDue(list: List<Staged>): Long? = list.filter { it.discarded }.minOfOrNull { it.deleteAt }
+        fun nextDue(list: List<Photo>): Long? = list.filter { it.discarded }.minOfOrNull { it.deleteAt }
     }
 }

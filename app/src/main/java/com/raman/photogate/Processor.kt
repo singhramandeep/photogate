@@ -7,24 +7,24 @@ object Processor {
     /** How far back each scan looks. Covers files that MediaStore only shows once they are finished. */
     const val LOOKBACK_SEC = 24 * 3600L
 
-    /** A file must be this long untouched before it is moved, so the camera has finished writing it. */
+    /** A file must be this long untouched before it is handled, so the camera has finished writing it. */
     const val SETTLE_MS = 3_000L
 
-    enum class Action { SKIP, WAIT, STAGE, APPROVE }
+    enum class Action { SKIP, WAIT, ASK, APPROVE }
 
     /** Pure decision for one new item (unit tested). */
     fun decide(
         folder: String, addedMs: Long, modifiedMs: Long,
         folders: Set<String>, mode: String, windowMs: Long, nowMs: Long,
     ): Action {
-        // PhotoGate's own folder (approved photos, and the hidden staging folder inside it) is never touched
+        // PhotoGate's own folder (the approved copies) is never asked about
         if (folder.startsWith(Gallery.FOLDER, ignoreCase = true)) return Action.SKIP
         if (folder !in folders) return Action.SKIP
         val taken = maxOf(addedMs, modifiedMs)
         if (windowMs > 0 && nowMs - taken > windowMs) return Action.SKIP
-        if (mode == "none") return Action.SKIP // stays where it is, never asked
+        if (mode == "none") return Action.SKIP // never asked, nothing happens
         if (nowMs - modifiedMs < SETTLE_MS) return Action.WAIT
-        return if (mode == "all") Action.APPROVE else Action.STAGE
+        return if (mode == "all") Action.APPROVE else Action.ASK
     }
 
     /** What the "handled" memory should hold after a scan: old entries dropped so it stays small. */
@@ -52,10 +52,16 @@ object Processor {
         val folders = Store.folders(app)
         val mode = Store.mode(app)
         val windowMs = Store.windowMin(app) * 60_000L
+        // a tracked photo can show up again under a new id (e.g. put back from the old staging folder)
+        val tracked = Store.staged(app).map { it.path }.toSet()
         val done = HashMap<Long, Long>()
         var again = false
 
         for (item in fresh) {
+            if (item.file?.path in tracked) {
+                done[item.id] = item.addedMs / 1000
+                continue
+            }
             when (decide(item.folder, item.addedMs, item.modifiedMs, folders, mode, windowMs, nowMs)) {
                 Action.WAIT -> {
                     again = true
@@ -63,7 +69,7 @@ object Processor {
                 }
                 Action.SKIP -> Unit
                 Action.APPROVE -> Gallery.approveDirect(app, item)
-                Action.STAGE -> Gallery.stage(app, item)?.let { Notifier.postAsk(app, it) }
+                Action.ASK -> Gallery.track(app, item)?.let { Notifier.postAsk(app, it) }
             }
             // every item is remembered, even in folders that are off: a folder switched on later only catches
             // what arrives from then on

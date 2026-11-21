@@ -45,18 +45,19 @@ object Store {
         p(c).edit().putStringSet("handled", m.map { "${it.key}:${it.value}" }.toSet()).apply()
     }
 
-    // ---- everything sitting in the staging folder (waiting for a decision, or discarded and due for deletion) ----
+    // ---- photos being tracked (waiting for a decision, or discarded and due for deletion) ----
+    // (key is still "staged" so photos from the earlier staging-folder version are found and put back)
     @Synchronized
-    fun staged(c: Context): List<Staged> {
+    fun staged(c: Context): List<Photo> {
         val raw = p(c).getString("staged", null) ?: return emptyList()
         return runCatching {
             val a = JSONArray(raw)
-            (0 until a.length()).map { Staged.fromJson(a.getJSONObject(it)) }
+            (0 until a.length()).map { Photo.fromJson(a.getJSONObject(it)) }
         }.getOrDefault(emptyList())
     }
 
     @Synchronized
-    private fun putStaged(c: Context, list: List<Staged>) {
+    private fun putStaged(c: Context, list: List<Photo>) {
         val a = JSONArray()
         list.forEach { a.put(it.toJson()) }
         p(c).edit().putString("staged", a.toString()).apply()
@@ -64,15 +65,15 @@ object Store {
     }
 
     @Synchronized
-    fun addStaged(c: Context, s: Staged) = putStaged(c, staged(c).filter { it.id != s.id } + s)
+    fun addStaged(c: Context, s: Photo) = putStaged(c, staged(c).filter { it.id != s.id } + s)
 
     @Synchronized
-    fun updateStaged(c: Context, s: Staged) = putStaged(c, staged(c).map { if (it.id == s.id) s else it })
+    fun updateStaged(c: Context, s: Photo) = putStaged(c, staged(c).map { if (it.id == s.id) s else it })
 
     @Synchronized
     fun removeStaged(c: Context, id: Long) = putStaged(c, staged(c).filter { it.id != id })
 
-    fun stagedById(c: Context, id: Long): Staged? = staged(c).firstOrNull { it.id == id }
+    fun stagedById(c: Context, id: Long): Photo? = staged(c).firstOrNull { it.id == id }
 
     // ---- counters ----
     fun approvedCount(c: Context): Int = p(c).getInt("approved", 0)
@@ -90,7 +91,7 @@ object Store {
         bump()
     }
 
-    // ---- temporary modes: "none" (leave photos where they are), "all" (approve everything) ----
+    // ---- temporary modes: "none" (don't ask, do nothing), "all" (approve everything) ----
     fun startMode(c: Context, mode: String, durationMs: Long) {
         p(c).edit().putString("mode", mode)
             .putLong("modeUntil", System.currentTimeMillis() + durationMs).apply()

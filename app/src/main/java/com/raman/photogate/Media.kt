@@ -110,7 +110,7 @@ object Media {
         return counts.entries.map { it.key to it.value }.sortedByDescending { it.second }
     }
 
-    /** Thumbnail of a file in staging (not in MediaStore, so straight from the file). */
+    /** Thumbnail straight from the file. */
     fun thumb(f: File, isVideo: Boolean, px: Int = 400): Bitmap? = try {
         if (isVideo) ThumbnailUtils.createVideoThumbnail(f, Size(px, px), null)
         else ThumbnailUtils.createImageThumbnail(f, Size(px, px), null)

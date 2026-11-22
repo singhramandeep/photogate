@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity(), Actions {
         super.onResume()
         // back from the All files access screen, or from anywhere else: refresh screens
         Store.refresh()
-        if (Store.watch(this) && Gallery.hasAccess()) startWatching(this) // also restarts a refused boot start
+        syncWatcher(this) // watching runs by itself while access is granted and a folder is on
         val app = applicationContext
         Thread {
             scanUntilSettled(app, "App opened")
@@ -66,9 +66,6 @@ class MainActivity : ComponentActivity(), Actions {
         if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    override fun startWatching() = startWatching(this)
-    override fun stopWatching() = stopWatching(this)
-
     override fun openGallery() {
         val i = packageManager.getLaunchIntentForPackage("com.sec.android.gallery3d")
             ?: packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
@@ -76,6 +73,13 @@ class MainActivity : ComponentActivity(), Actions {
     }
 
     companion object {
+        /** Watching is automatic: on while All files access is granted and at least one folder is switched on. */
+        fun shouldWatch(c: Context): Boolean = Gallery.hasAccess() && Store.folders(c).isNotEmpty()
+
+        fun syncWatcher(c: Context) {
+            if (shouldWatch(c)) startWatching(c) else stopWatching(c)
+        }
+
         fun startWatching(c: Context) {
             try {
                 ContextCompat.startForegroundService(c, Intent(c, WatchService::class.java))

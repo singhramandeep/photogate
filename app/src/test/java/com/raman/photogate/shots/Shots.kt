@@ -49,21 +49,18 @@ class Shots {
         Store.addApproved(c, Photo(103, File(dir, "p3.jpg").path, "p3.jpg", "Pictures/WhatsApp/", false, now - 9, category = "Social", auto = true))
     }
 
-    @Test fun inbox() { fixtures(); shot { InboxScreen({}) } }
+    @Test fun inbox() { fixtures(); shot { InboxScreen {} } }
     @Test fun bin() { fixtures(); shot { BinScreen() } }
     @Test fun binDark() { fixtures(); shot(dark = true) { BinScreen() } }
-    @Test fun emptyInbox() { shot { InboxScreen({}) } }
+    @Test fun emptyInbox() { shot { InboxScreen {} } }
     private val noop = object : Actions {
         override fun askAccess() {}
         override fun askNotifications() {}
         override fun openGallery() {}
-        override fun startWatching() {}
-        override fun stopWatching() {}
         override fun scanNow() {}
     }
 
-    @Test fun approved() { fixtures(); shot { ApprovedScreen() } }
-    @Test fun inboxWithAutoApproveOn() { fixtures(); Store.startMode(ctx, "all", 3_600_000L); shot { InboxScreen({}) } }
+    @Test fun uploaded() { fixtures(); shot { UploadedScreen() } }
 
     @Test fun app() { fixtures(); shot { App(noop) } }
     @Test fun settings() { fixtures(); Gallery.previewAccess = false; shot { SettingsScreen(noop) } }

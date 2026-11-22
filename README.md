@@ -8,23 +8,17 @@ Selective photo backup for Android 11+, without any Google login or Google Cloud
 
 How it works:
 
-- **Sources:** choose which folders to watch and give each a **category** (Camera, Screenshots, Social, Downloads,
-  Other, or your own). PhotoGate guesses one from the folder name.
-- When a new photo or video lands in a watched folder, it stays right there and shows up in the **Inbox** (and as a
-  quiet notification) with **Approve**, **Discard** or **Delete now**. Tap a photo to review them one by one.
-- **Approve** moves it into `DCIM/PhotoGate/<category>/`, e.g. `DCIM/PhotoGate/Screenshots/`, and writes the category
-  into the photo's description (EXIF ImageDescription; JPEG, PNG and WebP only, not HEIC or videos). Sync only those
-  folders to Google Photos (see First run), and only approved photos reach the cloud.
-- **Discard** deletes the original after a delay (Immediately / 1 h / 4 h / 8 h / 24 h, set in Settings). Until then
-  it sits in the **Bin** with a ⏱ tag showing how long it has left; you can still Approve it, send it back to the
-  Inbox, or Delete now.
-- **Delete now** deletes the original at once.
+1. **Sources:** switch on the folders to watch (Camera, Screenshots, WhatsApp, ...) and give each a **category**
+   (Camera, Screenshots, Social, Downloads, Other, or your own). Watching starts by itself.
+2. Every new photo or video in those folders stays where it is and lands in the **Inbox**, with a quiet notification.
+3. For each one choose:
+   - **Upload:** moves it to `DCIM/PhotoGate/<category>/` and writes the category into its description. Your
+     gallery syncs only those folders to Google Photos. Listed under **Uploaded**, with Undo.
+   - **Bin:** waits in the **Bin** with a ⏱ countdown, then is deleted from the phone (timer in Settings).
+     You can still Upload it or send it back to the Inbox.
+   - **Delete now:** deleted from the phone at once.
 
-Every photo from a watched folder always shows up in one of three tabs: **Inbox** (waiting), **Approved** (moved to
-PhotoGate; Undo puts it back) or **Bin** (discarded, with its countdown).
-
-Also: quick modes with auto-expiry (Auto-approve everything / Quiet mode = Inbox without notifications; a banner on
-the Inbox shows when one is on), a notification window, and an Activity log with Scan now in Settings.
+Settings only has: permissions, the Bin timer, the sync setup steps, and a Troubleshooting activity log.
 
 ## 1. Build the APK
 
@@ -42,8 +36,8 @@ APK: `app/build/outputs/apk/release/app-release.apk`.
    created without asking you to confirm each one.)
 2. Settings > Notifications: **Allow** (Android 13+).
 3. Sources tab: switch on the folders you want caught (Camera is on by default) and check each one's category.
-4. Settings > switch on **Watch for new photos**.
-5. Approve one photo so `DCIM/PhotoGate` exists. Then:
+   Watching starts by itself (a small permanent notification shows it is running).
+4. Upload one photo so `DCIM/PhotoGate` exists. Then:
    - Google Photos app > Settings > Backup: turn **off** (it always includes Camera, so it can't be used).
    - Samsung Gallery > Settings > **Sync with Google Photos** (Cloud sync): choose albums to sync, switch on only the
      PhotoGate category folders, Camera and everything else off. Careful: `DCIM/PhotoGate/Camera` shows up as an

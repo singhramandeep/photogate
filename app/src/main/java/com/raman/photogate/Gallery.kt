@@ -19,7 +19,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * What PhotoGate does with files. While waiting, a photo stays in its original folder.
- * Approve moves it into DCIM/PhotoGate, Discard deletes it after a delay, Delete now deletes it at once.
+ * Upload moves it into DCIM/PhotoGate/<category> (synced by the gallery), Bin deletes it after the Bin timer,
+ * Delete now deletes it at once.
  */
 object Gallery {
     /** RELATIVE_PATH of the approved folder. Sync only this folder to Google Photos (Samsung Gallery). */
@@ -48,25 +49,6 @@ object Gallery {
         val f = item.file ?: return null
         return Photo(item.id, f.path, f.name, item.folder, item.isVideo, System.currentTimeMillis())
             .also { Store.addStaged(c, it) }
-    }
-
-    /** "Approve everything" mode: move straight into PhotoGate. */
-    fun approveDirect(c: Context, item: Item): Boolean {
-        val src = item.file ?: return false
-        return try {
-            val cat = Store.categoryOf(c, item.folder)
-            val dst = gate().approve(src, cat)
-            Describe.write(dst, cat)
-            rescan(c, src.path, dst.path)
-            Store.addApproved(
-                c, Photo(item.id, dst.path, dst.name, item.folder, item.isVideo, System.currentTimeMillis(),
-                    category = cat, auto = true),
-            )
-            Store.countApproved(c)
-            true
-        } catch (e: IOException) {
-            false
-        }
     }
 
     fun approve(c: Context, id: Long): Boolean {
@@ -115,10 +97,10 @@ object Gallery {
             Store.removeApproved(c, id)
             Store.addStaged(c, Photo(a.id, back.path, back.name, a.from, a.isVideo, System.currentTimeMillis()))
             rescan(c, f.path, back.path)
-            Store.log(c, "${a.name}: approval undone, back in ${a.from} and the Inbox")
+            Store.log(c, "${a.name}: upload undone, back in ${a.from} and the Inbox")
             true
         } catch (e: IOException) {
-            Store.log(c, "${a.name}: could not undo approval: ${e.message}")
+            Store.log(c, "${a.name}: could not undo upload: ${e.message}")
             false
         }
     }

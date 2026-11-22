@@ -8,44 +8,23 @@ class ProcessorTest {
     private val now = 1_800_000_000_000L
     private val cam = "DCIM/Camera/"
 
-    private class I(val folder: String, val added: Long, val modified: Long)
+    private fun decide(folder: String = cam, modifiedAgoMs: Long = 10_000, folders: Set<String> = setOf(cam)) =
+        Processor.decide(folder, now - modifiedAgoMs, folders, now)
 
-    private fun item(folder: String = cam, addedAgoMs: Long = 10_000, modifiedAgoMs: Long = addedAgoMs) =
-        I(folder, now - addedAgoMs, now - modifiedAgoMs)
+    @Test fun newPhotoInWatchedFolderGoesToInbox() = assertEquals(Action.ASK, decide())
+    @Test fun skipsFoldersThatAreOff() = assertEquals(Action.SKIP, decide(folder = "Pictures/Screenshots/"))
+    @Test fun waitsWhileCameraIsStillWriting() = assertEquals(Action.WAIT, decide(modifiedAgoMs = 1_000))
 
-    private fun decide(i: I, mode: String = "ask", windowMin: Int = 0, folders: Set<String> = setOf(cam)) =
-        Processor.decide(i.folder, i.added, i.modified, folders, mode, windowMin * 60_000L, now)
-
-    @Test fun asksAboutNewPhotoInWatchedFolder() = assertEquals(Action.ASK, decide(item()))
-    @Test fun skipsOtherFolders() = assertEquals(Action.SKIP, decide(item(folder = "Pictures/Screenshots/")))
-    @Test fun quietModeStillLandsInInbox() = assertEquals(Action.ASK_QUIET, decide(item(), mode = "none"))
-    @Test fun allModeApprovesStraightAway() = assertEquals(Action.APPROVE, decide(item(), mode = "all"))
+    @Test fun oldOrLateArrivalsStillGoToInbox() {
+        for (ago in listOf(4_000L, 3_600_000L, 86_000_000L)) assertEquals(Action.ASK, decide(modifiedAgoMs = ago))
+    }
 
     @Test fun neverTouchesItsOwnFolder() {
-        val all = setOf(cam, Gallery.FOLDER, Gallery.FOLDER + ".staging/")
-        assertEquals(Action.SKIP, decide(item(folder = Gallery.FOLDER), folders = all))
-        assertEquals(Action.SKIP, decide(item(folder = Gallery.FOLDER + ".staging/"), folders = all))
-        assertEquals(Action.SKIP, decide(item(folder = "dcim/photogate/"), folders = all + "dcim/photogate/"))
+        val all = setOf(cam, Gallery.FOLDER, Gallery.FOLDER + "Camera/")
+        assertEquals(Action.SKIP, decide(folder = Gallery.FOLDER, folders = all))
+        assertEquals(Action.SKIP, decide(folder = Gallery.FOLDER + "Camera/", folders = all))
+        assertEquals(Action.SKIP, decide(folder = "dcim/photogate/", folders = all + "dcim/photogate/"))
     }
-
-    @Test fun waitsWhileCameraIsStillWriting() =
-        assertEquals(Action.WAIT, decide(item(addedAgoMs = 1_000)))
-
-    @Test fun lateArrivalsLandInInboxQuietly() =
-        assertEquals(Action.ASK_QUIET, decide(item(addedAgoMs = 10 * 60_000), windowMin = 5))
-
-    @Test fun everyFinishedPhotoInAWatchedFolderEndsUpSomewhere() {
-        for (mode in listOf("ask", "none", "all")) for (w in listOf(0, 1, 5, 60)) for (ago in listOf(4_000L, 3_600_000L, 86_000_000L)) {
-            val a = decide(item(addedAgoMs = ago), mode = mode, windowMin = w)
-            assert(a == Action.ASK || a == Action.ASK_QUIET || a == Action.APPROVE) { "$mode/$w/$ago -> $a" }
-        }
-    }
-
-    @Test fun windowKeepsFreshArrivals() =
-        assertEquals(Action.ASK, decide(item(addedAgoMs = 60_000), windowMin = 5))
-
-    @Test fun longVideoCountsFromWhenRecordingStopped() =
-        assertEquals(Action.ASK, decide(item(addedAgoMs = 20 * 60_000, modifiedAgoMs = 30_000), windowMin = 1))
 
     @Test fun skipReasonsAreSpecific() {
         assertEquals("folder Pictures/X/ is not switched on in Sources", Processor.skipReason("Pictures/X/", setOf(cam)))

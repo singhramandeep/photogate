@@ -119,8 +119,6 @@ interface Actions {
     fun askAccess()
     fun askNotifications()
     fun openGallery()
-    fun startWatching()
-    fun stopWatching()
     fun scanNow()
 }
 
@@ -162,15 +160,15 @@ fun App(act: Actions) {
                 selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background, edgePadding = 8.dp,
             ) {
                 TabLabel("Inbox", inbox, tab == 0) { tab = 0 }
-                TabLabel("Approved", approved, tab == 1, quiet = true) { tab = 1 }
+                TabLabel("Uploaded", approved, tab == 1, quiet = true) { tab = 1 }
                 TabLabel("Bin", bin, tab == 2) { tab = 2 }
                 TabLabel("Sources", 0, tab == 3) { tab = 3 }
                 TabLabel("Settings", 0, tab == 4) { tab = 4 }
             }
             Box(Modifier.fillMaxSize()) {
                 when (tab) {
-                    0 -> InboxScreen({ tab = 3 }, { tab = 4 })
-                    1 -> ApprovedScreen()
+                    0 -> InboxScreen { tab = 3 }
+                    1 -> UploadedScreen()
                     2 -> BinScreen()
                     3 -> SourcesScreen()
                     else -> SettingsScreen(act)
@@ -200,10 +198,9 @@ private fun TabLabel(text: String, count: Int, selected: Boolean, quiet: Boolean
 private fun Header() {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val now = rememberNow()
-    val watching = remember(tick) { Store.watch(c) && Gallery.hasAccess() }
+    val access = remember(tick) { Gallery.hasAccess() }
     val sources = remember(tick) { Store.folders(c).size }
-    val mode = remember(tick, now) { Store.mode(c) }
+    val watching = access && sources > 0
 
     Row(
         Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
@@ -224,17 +221,15 @@ private fun Header() {
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    if (watching) "Watching $sources source${if (sources == 1) "" else "s"}" else "Paused",
+                    when {
+                        watching -> "Watching $sources folder${if (sources == 1) "" else "s"}"
+                        !access -> "Paused · allow access in Settings"
+                        else -> "Paused · turn on a folder in Sources"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        if (mode != "ask") {
-            Pill(
-                if (mode == "all") "Auto-approve on" else "Quiet mode",
-                MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer,
-            )
         }
     }
 }
@@ -320,7 +315,7 @@ private fun Tile(p: Photo, topTag: (@Composable () -> Unit)?, onClick: () -> Uni
 // ================================================================ Inbox
 
 @Composable
-fun InboxScreen(goToSources: () -> Unit, goToSettings: () -> Unit = {}) {
+fun InboxScreen(goToSources: () -> Unit) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val run = rememberRunner()
@@ -328,12 +323,11 @@ fun InboxScreen(goToSources: () -> Unit, goToSettings: () -> Unit = {}) {
     var reviewing by remember { mutableStateOf<Long?>(null) }
 
     Column(Modifier.fillMaxSize()) {
-    ModeBanner(goToSettings)
     if (list.isEmpty()) {
         EmptyState(
             "All clear",
             "New photos from your sources wait here for a decision. They stay in their folder until then. " +
-                "Approved ones are in the Approved tab, discarded ones in the Bin.",
+                "Uploaded ones are in the Uploaded tab, binned ones in the Bin.",
             "Choose sources", goToSources,
         )
     } else {
@@ -345,8 +339,8 @@ fun InboxScreen(goToSources: () -> Unit, goToSettings: () -> Unit = {}) {
             )
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { run { list.forEach { Gallery.approve(c, it.id) } } }) { Text("Approve all") }
-                OutlinedButton(onClick = { run { list.forEach { Gallery.discard(c, it.id) } } }) { Text("Discard all") }
+                Button(onClick = { run { list.forEach { Gallery.approve(c, it.id) } } }) { Text("Upload all") }
+                OutlinedButton(onClick = { run { list.forEach { Gallery.discard(c, it.id) } } }) { Text("Bin all") }
             }
         }) { p -> Tile(p, null) { reviewing = p.id } }
     }
@@ -357,43 +351,11 @@ fun InboxScreen(goToSources: () -> Unit, goToSettings: () -> Unit = {}) {
     }
 }
 
-/** Shown on top of the Inbox while a quick mode runs, so it is never a surprise. */
-@Composable
-private fun ModeBanner(goToSettings: () -> Unit) {
-    val c = LocalContext.current
-    val tick = Store.tick.intValue
-    val now = rememberNow()
-    val mode = remember(tick, now) { Store.mode(c) }
-    if (mode == "ask") return
-    val until = remember(tick, now) { Store.modeUntil(c) }
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-    ) {
-        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).clickable(onClick = goToSettings)) {
-                Text(
-                    if (mode == "all") "Auto-approve is on" else "Quiet mode is on",
-                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                Text(
-                    (if (mode == "all") "New photos go straight to Approved" else "New photos land here without notifications") +
-                        " until " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(until)),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-            }
-            TextButton(onClick = { Store.stopMode(c) }) { Text("Stop") }
-        }
-    }
-}
-
-// ================================================================ Approved
+// ================================================================ Uploaded
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ApprovedScreen() {
+fun UploadedScreen() {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val all = remember(tick) { Store.approved(c).sortedByDescending { it.seenAt } }
@@ -404,13 +366,14 @@ fun ApprovedScreen() {
 
     if (all.isEmpty()) {
         EmptyState(
-            "Nothing approved yet",
-            "Approved photos move to DCIM/PhotoGate/<category> and are listed here. Undo puts one back in the Inbox.",
+            "Nothing uploaded yet",
+            "Upload moves a photo to DCIM/PhotoGate/<category>, which your gallery syncs to Google Photos. " +
+                "Uploaded photos are listed here; Undo puts one back in the Inbox.",
         )
     } else {
         PhotoGrid(list, header = {
             Text(
-                "${all.size} approved · in DCIM/PhotoGate, synced by your gallery",
+                "${all.size} uploaded · in DCIM/PhotoGate, synced by your gallery",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -424,9 +387,7 @@ fun ApprovedScreen() {
                 }
             }
         }) { p ->
-            Tile(p, topTag = if (p.auto) ({
-                Pill("Auto", MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer)
-            }) else null) { reviewing = p.id }
+            Tile(p, null) { reviewing = p.id }
         }
     }
 
@@ -464,13 +425,13 @@ fun BinScreen() {
     if (list.isEmpty()) {
         EmptyState(
             "Bin is empty",
-            "Discarded photos wait here, still in their folder, until their timer runs out. " +
+            "Photos you send to the Bin wait here, still in their folder, until their timer runs out. " +
                 "Timer: " + delayLabel(after) + " (change it in Settings).",
         )
     } else {
         PhotoGrid(list, header = {
             Text(
-                "${list.size} discarded · each is deleted from the phone when its ⏱ timer runs out",
+                "${list.size} in the Bin · each is deleted from the phone when its ⏱ timer runs out",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -551,9 +512,9 @@ private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit,
                     Text(
                         if (kind == Kind.APPROVED) {
                             "In ${p.path.substringAfter(Gallery.FOLDER, p.path).let { Gallery.FOLDER + it }.substringBeforeLast('/')}" +
-                                (if (p.auto) " · auto-approved" else "") + " · Undo puts it back in ${p.from.trimEnd('/')} and the Inbox"
+                                " · Undo puts it back in ${p.from.trimEnd('/')} and the Inbox"
                         } else {
-                            "In ${p.from.trimEnd('/')} · Approve moves it to PhotoGate/$cat and adds \"$cat\" to its description"
+                            "In ${p.from.trimEnd('/')} · Upload moves it to PhotoGate/$cat (synced to Google Photos) and adds \"$cat\" to its description"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -561,7 +522,7 @@ private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit,
                     Spacer(Modifier.height(16.dp))
                     if (kind == Kind.APPROVED) {
                         FilledTonalButton(onClick = { act { Gallery.undoApprove(c, p.id) } }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Undo approval")
+                            Text("Undo upload")
                         }
                         TextButton(onClick = { act { Gallery.deleteApproved(c, p.id) } }, modifier = Modifier.fillMaxWidth()) {
                             Text("Delete from phone", color = MaterialTheme.colorScheme.error)
@@ -569,7 +530,7 @@ private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit,
                     } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { act { Gallery.approve(c, p.id) } }, modifier = Modifier.weight(1f)) {
-                            Text("Approve")
+                            Text("Upload")
                         }
                         if (binMode) {
                             FilledTonalButton(onClick = { act { Gallery.undiscard(c, p.id) } }, modifier = Modifier.weight(1f)) {
@@ -577,7 +538,7 @@ private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit,
                             }
                         } else {
                             FilledTonalButton(onClick = { act { Gallery.discard(c, p.id) } }, modifier = Modifier.weight(1f)) {
-                                Text("Discard")
+                                Text("Bin")
                             }
                         }
                     }
@@ -623,7 +584,7 @@ fun SourcesScreen(preview: List<Pair<String, Int>>? = null) {
     ) {
         item {
             Text(
-                "Turn on the folders to watch and give each one a category. Approved photos move to " +
+                "Turn on the folders to watch and give each one a category. Uploaded photos move to " +
                     "PhotoGate/<category>. A folder only catches what arrives after you turn it on.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -655,7 +616,10 @@ private fun SourceCard(path: String, count: Int, tracked: Boolean) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Switch(checked = tracked, onCheckedChange = { Store.setFolder(c, path, it) })
+                Switch(checked = tracked, onCheckedChange = {
+                    Store.setFolder(c, path, it)
+                    MainActivity.syncWatcher(c) // watching runs while at least one folder is on
+                })
             }
             if (tracked) {
                 Spacer(Modifier.height(10.dp))
@@ -762,146 +726,78 @@ private fun <T> Choices(options: List<Pair<T, String>>, selected: T, onPick: (T)
 fun SettingsScreen(act: Actions) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val now = rememberNow()
-    val watch = remember(tick) { Store.watch(c) }
-    val window = remember(tick) { Store.windowMin(c) }
     val deleteAfter = remember(tick) { Store.deleteAfterMin(c) }
-    val approved = remember(tick) { Store.approvedCount(c) }
-    val deleted = remember(tick) { Store.deletedCount(c) }
     val hasAccess = remember(tick) { Gallery.hasAccess() }
     val hasNotif = remember(tick) { runCatching { MainActivity.hasNotifications(c) }.getOrDefault(true) }
-    val mode = remember(tick, now) { Store.mode(c) }
-    val until = remember(tick, now) { Store.modeUntil(c) }
-    var modeChoice by remember { mutableStateOf<String?>(null) } // nothing preselected: a mode never starts by accident
-    var hours by remember { mutableIntStateOf(8) }
+    var showLog by remember { mutableStateOf(false) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Stat("$approved", "approved", Modifier.weight(1f))
-            Stat("$deleted", "deleted", Modifier.weight(1f))
-        }
-
         Section("Permissions") {
-            Line("All files access", if (hasAccess) "Granted" else "Needed to move approved photos and delete discarded ones") {
+            Line("All files access", if (hasAccess) "Granted" else "Needed to see new photos and to move or delete them") {
                 if (!hasAccess) Button(onClick = { act.askAccess() }) { Text("Allow") }
                 else Text("✓", color = MaterialTheme.colorScheme.secondary)
             }
-            Line("Notifications", if (hasNotif) "Granted" else "So each new photo can ask right away") {
+            Line("Notifications", if (hasNotif) "Granted" else "So each new photo can ask Upload / Bin / Delete now") {
                 if (!hasNotif) Button(onClick = { act.askNotifications() }) { Text("Allow") }
                 else Text("✓", color = MaterialTheme.colorScheme.secondary)
             }
         }
 
-        Section("Watching") {
-            Line("Watch for new photos", "Keeps a small permanent notification so new photos are caught right away") {
-                Switch(checked = watch, onCheckedChange = {
-                    Store.setWatch(c, it)
-                    if (it) {
-                        if (!Gallery.hasAccess()) act.askAccess() else act.startWatching()
-                    } else act.stopWatching()
-                })
-            }
-            Spacer(Modifier.height(8.dp))
-            Text("Notify only for photos newer than", style = MaterialTheme.typography.titleSmall)
-            Text("Older ones (e.g. noticed late) still land in the Inbox, just quietly.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Choices(
-                listOf(1 to "1 min", 5 to "5 min", 15 to "15 min", 60 to "1 hour", 0 to "No limit"),
-                window,
-            ) { Store.setWindowMin(c, it) }
-        }
-
         Section("Bin timer") {
-            Text("Discarded photos are deleted from the phone after", style = MaterialTheme.typography.bodyMedium)
+            Text("Photos in the Bin are deleted from the phone after", style = MaterialTheme.typography.bodyMedium)
             Choices(
                 listOf(0 to "Immediately", 60 to "1 h", 240 to "4 h", 480 to "8 h", 1440 to "24 h"),
                 deleteAfter,
             ) { Store.setDeleteAfterMin(c, it) }
             Text(
-                "Applies to photos discarded from now on. Delete now is always there.",
+                "Applies to photos sent to the Bin from now on.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        Section("Quick modes") {
-            if (mode != "ask") {
-                Text(
-                    (if (mode == "all") "Auto-approve" else "Quiet mode") + " until " +
-                        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(until)),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                OutlinedButton(onClick = { Store.stopMode(c) }) { Text("Stop now") }
-            } else {
-                Choices(listOf<Pair<String?, String>>("all" to "Auto-approve everything", "none" to "Quiet mode"), modeChoice) {
-                    modeChoice = if (modeChoice == it) null else it
+        Section("Sync to Google Photos (one-time setup)") {
+            listOf(
+                "Google Photos app > Backup: turn it off.",
+                "Upload one photo, so the PhotoGate folders exist.",
+                "Samsung Gallery > Settings > Sync with Google Photos: switch on only the PhotoGate folders, leave Camera off.",
+            ).forEachIndexed { i, step ->
+                Row(Modifier.padding(vertical = 3.dp)) {
+                    Text("${i + 1}.", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(20.dp))
+                    Text(step, style = MaterialTheme.typography.bodySmall)
                 }
-                Text(
-                    when (modeChoice) {
-                        "all" -> "Every new photo moves straight to its PhotoGate folder and shows up under Approved. Handy on a trip."
-                        "none" -> "New photos still land in the Inbox, just without notifications."
-                        else -> "Pick a mode to run for a while. Nothing is on right now: every new photo asks."
-                    },
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(6.dp))
-                Choices(listOf(2 to "2 h", 8 to "8 h", 24 to "1 day", 96 to "4 days", 336 to "14 days"), hours) { hours = it }
-                Spacer(Modifier.height(6.dp))
-                Button(enabled = modeChoice != null, onClick = {
-                    modeChoice?.let { Store.startMode(c, it, hours * 3_600_000L) }
-                    modeChoice = null
-                }) { Text("Start") }
-                Text("Modes switch themselves off when the time is up.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        }
-
-        Section("Activity") {
-            val lines = remember(tick) { Store.logLines(c).takeLast(25).reversed() }
-            val clip = androidx.compose.ui.platform.LocalClipboardManager.current
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = { act.scanNow() }) { Text("Scan now") }
-                OutlinedButton(onClick = {
-                    clip.setText(androidx.compose.ui.text.AnnotatedString(Store.logLines(c).joinToString("\n")))
-                }) { Text("Copy") }
-                TextButton(onClick = { Store.clearLog(c) }) { Text("Clear") }
-            }
-            Spacer(Modifier.height(6.dp))
-            if (lines.isEmpty()) {
-                Text("Nothing yet. Take a photo, then come back here.", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            lines.forEach {
-                Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                    modifier = Modifier.padding(vertical = 2.dp))
-            }
-        }
-
-        Section("Sync to Google Photos") {
-            Text(
-                "Turn off Google Photos' own backup. In Samsung Gallery: Settings > Sync with Google Photos > " +
-                    "choose albums: switch on only your PhotoGate category folders (they appear after the first " +
-                    "approved photo in each). Leave Camera off.",
-                style = MaterialTheme.typography.bodySmall,
-            )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { act.openGallery() }) { Text("Open gallery") }
         }
-    }
-}
 
-@Composable
-private fun Stat(value: String, label: String, modifier: Modifier) {
-    Card(
-        modifier = modifier, shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer)
-            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        Section("Troubleshooting") {
+            Line("Activity log", "What PhotoGate saw and did with each new photo") {
+                TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "Hide" else "Show") }
+            }
+            if (showLog) {
+                val lines = remember(tick) { Store.logLines(c).takeLast(25).reversed() }
+                val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = { act.scanNow() }) { Text("Scan now") }
+                    OutlinedButton(onClick = {
+                        clip.setText(androidx.compose.ui.text.AnnotatedString(Store.logLines(c).joinToString("\n")))
+                    }) { Text("Copy") }
+                    TextButton(onClick = { Store.clearLog(c) }) { Text("Clear") }
+                }
+                Spacer(Modifier.height(6.dp))
+                if (lines.isEmpty()) {
+                    Text("Nothing yet. Take a photo, then come back here.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                lines.forEach {
+                    Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                        modifier = Modifier.padding(vertical = 2.dp))
+                }
+            }
         }
     }
 }

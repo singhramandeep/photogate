@@ -140,45 +140,10 @@ object Store {
         bump()
     }
 
-    // ---- temporary modes: "none" (collect quietly: Inbox, no notifications), "all" (approve everything) ----
-    fun startMode(c: Context, mode: String, durationMs: Long) {
-        p(c).edit().putString("mode", mode)
-            .putLong("modeUntil", System.currentTimeMillis() + durationMs).apply()
-        bump()
-    }
-
-    fun stopMode(c: Context) {
-        p(c).edit().putLong("modeUntil", 0L).apply()
-        bump()
-    }
-
-    fun modeUntil(c: Context): Long = p(c).getLong("modeUntil", 0L)
-
-    /** "ask" when no temporary mode is running. */
-    fun mode(c: Context): String {
-        if (modeUntil(c) <= System.currentTimeMillis()) return "ask"
-        val m = p(c).getString("mode", "ask") ?: "ask"
-        return if (m == "none" || m == "all") m else "ask" // older versions had an "album" mode
-    }
-
-    // ---- decision window (minutes, 0 = no limit) ----
-    fun windowMin(c: Context): Int = p(c).getInt("windowMin", 0)
-    fun setWindowMin(c: Context, m: Int) {
-        p(c).edit().putInt("windowMin", m).apply()
-        bump()
-    }
-
     // ---- how long a discarded photo waits before it is deleted (minutes, 0 = immediately) ----
     fun deleteAfterMin(c: Context): Int = p(c).getInt("deleteAfterMin", 24 * 60)
     fun setDeleteAfterMin(c: Context, m: Int) {
         p(c).edit().putInt("deleteAfterMin", m).apply()
-        bump()
-    }
-
-    // ---- misc ----
-    fun watch(c: Context): Boolean = p(c).getBoolean("watch", false)
-    fun setWatch(c: Context, on: Boolean) {
-        p(c).edit().putBoolean("watch", on).apply()
         bump()
     }
 

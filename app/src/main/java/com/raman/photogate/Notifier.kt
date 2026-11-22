@@ -28,7 +28,7 @@ object Notifier {
         )
         // LOW = no sound, no pop-over; it waits in the shade
         nm.createNotificationChannel(
-            NotificationChannel(CH_ASK, "Approve or discard", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CH_ASK, "Upload, Bin or Delete now", NotificationManager.IMPORTANCE_LOW)
         )
     }
 
@@ -60,14 +60,14 @@ object Notifier {
         val kind = if (item.isVideo) "video" else "photo"
         val b = NotificationCompat.Builder(c, CH_ASK)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Send this $kind to PhotoGate?")
-            .setContentText("${Media.label(item.from)} · Approve moves it to PhotoGate/${Store.categoryOf(c, item.from)}")
+            .setContentTitle("Upload this $kind?")
+            .setContentText("${Media.label(item.from)} · Upload moves it to PhotoGate/${Store.categoryOf(c, item.from)}")
             .setGroup(GROUP)
             .setAutoCancel(true)
             .setSilent(true)
             .setContentIntent(openApp(c))
-            .addAction(0, "Approve", action(c, ACTION_UPLOAD, item.id))
-            .addAction(0, "Discard", action(c, ACTION_DISCARD, item.id))
+            .addAction(0, "Upload", action(c, ACTION_UPLOAD, item.id))
+            .addAction(0, "Bin", action(c, ACTION_DISCARD, item.id))
             .addAction(0, "Delete now", action(c, ACTION_DELETE, item.id))
         if (bmp != null) {
             b.setLargeIcon(bmp)

@@ -449,7 +449,7 @@ private fun Review(list: List<Photo>, id: Long, binMode: Boolean, onClose: () ->
                 ) {
                     Text(p.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        "In ${p.from.trimEnd('/')} · Approve moves it to PhotoGate/$cat",
+                        "In ${p.from.trimEnd('/')} · Approve moves it to PhotoGate/$cat and adds \"$cat\" to its description",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

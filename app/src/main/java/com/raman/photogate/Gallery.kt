@@ -54,7 +54,9 @@ object Gallery {
     fun approveDirect(c: Context, item: Item): Boolean {
         val src = item.file ?: return false
         return try {
-            val dst = gate().approve(src, Store.categoryOf(c, item.folder))
+            val cat = Store.categoryOf(c, item.folder)
+            val dst = gate().approve(src, cat)
+            Describe.write(dst, cat)
             rescan(c, src.path, dst.path)
             Store.countApproved(c)
             true
@@ -67,7 +69,9 @@ object Gallery {
         val p = Store.stagedById(c, id) ?: return false
         Notifier.cancel(c, id)
         return try {
-            val dst = gate().approve(File(p.path), Store.categoryOf(c, p.from))
+            val cat = Store.categoryOf(c, p.from)
+            val dst = gate().approve(File(p.path), cat)
+            Describe.write(dst, cat) // before the rescan, so MediaStore and sync see the final file
             Store.removeStaged(c, id)
             rescan(c, p.path, dst.path) // gone from its old folder, new in PhotoGate
             Store.countApproved(c)

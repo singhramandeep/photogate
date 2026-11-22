@@ -12,7 +12,8 @@ How it works:
   Other, or your own). PhotoGate guesses one from the folder name.
 - When a new photo or video lands in a watched folder, it stays right there and shows up in the **Inbox** (and as a
   quiet notification) with **Approve**, **Discard** or **Delete now**. Tap a photo to review them one by one.
-- **Approve** moves it into `DCIM/PhotoGate/<category>/`, e.g. `DCIM/PhotoGate/Screenshots/`. Sync only those
+- **Approve** moves it into `DCIM/PhotoGate/<category>/`, e.g. `DCIM/PhotoGate/Screenshots/`, and writes the category
+  into the photo's description (EXIF ImageDescription; JPEG, PNG and WebP only, not HEIC or videos). Sync only those
   folders to Google Photos (see First run), and only approved photos reach the cloud.
 - **Discard** deletes the original after a delay (Immediately / 1 h / 4 h / 8 h / 24 h, set in Settings). Until then
   it sits in the **Bin** with a ⏱ tag showing how long it has left; you can still Approve it, send it back to the

@@ -19,7 +19,17 @@ How it works:
      You can still Upload it or send it back to the Inbox.
    - **Delete now:** deleted from the phone at once.
 
-Settings only has: permissions, the Bin timer, the sync setup steps, and a Troubleshooting activity log.
+In the Inbox, Uploaded and Bin grids: tap to review, **long-press to select** several and act on them together
+(Upload / Bin / Delete, Undo upload...), and **pinch with two fingers** to make thumbnails bigger or smaller.
+
+**Checking:** Settings > Check for new photos: Immediately (Android wakes PhotoGate when the photo library changes;
+one notification per photo) or every 1 / 2 / 4 / 8 hours (one "N photos to review" notification). No permanent
+notification. Set Battery to Unrestricted (Settings > Permissions) so Android doesn't delay the checks.
+
+A welcome guide runs on first launch, and one-time tips explain each screen (Settings > Guide > Show again).
+
+Settings only has: permissions (incl. battery), check frequency, the Bin timer, the sync setup steps, and a
+Troubleshooting section (activity log, guide).
 
 ## 1. Build the APK
 

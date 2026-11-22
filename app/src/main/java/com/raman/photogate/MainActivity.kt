@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity(), Actions {
         super.onResume()
         // back from the All files access screen, or from anywhere else: refresh screens
         Store.refresh()
-        syncWatcher(this) // watching runs by itself while access is granted and a folder is on
+        Scheduler.apply(this) // checking runs by itself while access is granted and a folder is on
         val app = applicationContext
         Thread {
             scanUntilSettled(app, "App opened")
@@ -51,7 +51,7 @@ class MainActivity : ComponentActivity(), Actions {
     /** Scans, and again a few seconds later while a file is still being written (max ~20 s). */
     private fun scanUntilSettled(app: Context, why: String) {
         var tries = 0
-        while (Processor.scanSafely(app, why) && tries++ < 5) Thread.sleep(Processor.SETTLE_MS + 500)
+        while (Processor.scanSafely(app, why).again && tries++ < 5) Thread.sleep(Processor.SETTLE_MS + 500)
     }
 
     override fun askAccess() {
@@ -66,6 +66,16 @@ class MainActivity : ComponentActivity(), Actions {
         if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
+    /** App info page: on Samsung, Battery > Unrestricted. Needs no special permission (Play-safe). */
+    override fun openBatterySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
+            Toast.makeText(this, "Tap Battery, then choose Unrestricted", Toast.LENGTH_LONG).show()
+        } catch (e: ActivityNotFoundException) {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+    }
+
     override fun openGallery() {
         val i = packageManager.getLaunchIntentForPackage("com.sec.android.gallery3d")
             ?: packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
@@ -73,24 +83,9 @@ class MainActivity : ComponentActivity(), Actions {
     }
 
     companion object {
-        /** Watching is automatic: on while All files access is granted and at least one folder is switched on. */
-        fun shouldWatch(c: Context): Boolean = Gallery.hasAccess() && Store.folders(c).isNotEmpty()
-
-        fun syncWatcher(c: Context) {
-            if (shouldWatch(c)) startWatching(c) else stopWatching(c)
-        }
-
-        fun startWatching(c: Context) {
-            try {
-                ContextCompat.startForegroundService(c, Intent(c, WatchService::class.java))
-            } catch (e: IllegalStateException) {
-                Toast.makeText(c, "Could not start the watcher: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-
-        fun stopWatching(c: Context) {
-            c.stopService(Intent(c, WatchService::class.java))
-        }
+        /** True when Android will not hold back PhotoGate's background checks to save battery. */
+        fun batteryUnrestricted(c: Context): Boolean =
+            c.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(c.packageName)
 
         fun hasNotifications(c: Context): Boolean =
             Build.VERSION.SDK_INT < 33 ||

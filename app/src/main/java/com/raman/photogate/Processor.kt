@@ -34,21 +34,25 @@ object Processor {
             else -> "skipped"
         }
 
+    /** [again]: some files were still being written, look again shortly. [added]: new photos put in the Inbox. */
+    data class Result(val again: Boolean, val added: Int)
+
+    private val NOTHING = Result(false, 0)
+
     /** [scan] that never crashes the app: problems go to the activity log instead. */
-    fun scanSafely(c: Context, why: String): Boolean = try {
-        scan(c, why)
+    fun scanSafely(c: Context, why: String, perPhotoNotify: Boolean = true): Result = try {
+        scan(c, why, perPhotoNotify)
     } catch (e: Throwable) {
         Store.log(c, "Scan failed: $e")
-        false
+        NOTHING
     }
 
-    /** Returns true if some files were still being written and a later scan should look again. */
     @Synchronized
-    fun scan(c: Context, why: String = "scan"): Boolean {
+    fun scan(c: Context, why: String = "scan", perPhotoNotify: Boolean = true): Result {
         val app = c.applicationContext
         if (!Media.hasPermission(app)) {
             Store.log(app, "$why: no All files access, nothing checked")
-            return false
+            return NOTHING
         }
 
         val baseline = Store.lastSeen(app)
@@ -58,7 +62,7 @@ object Processor {
             Store.setLastSeen(app, max)
             val what = if (max > 0) "photos already on the phone (up to #$max) are left alone" else "no photos yet"
             Store.log(app, "First run: $what. Photos taken from now on are caught.")
-            return false
+            return NOTHING
         }
         val nowMs = System.currentTimeMillis()
         val nowSec = nowMs / 1000
@@ -66,7 +70,7 @@ object Processor {
         val fresh = Media.recent(app, nowSec - LOOKBACK_SEC, baseline).filter { it.id !in handled }
         if (fresh.isEmpty()) {
             if (why != "change") Store.log(app, "$why: nothing new")
-            return false
+            return NOTHING
         }
 
         val folders = Store.folders(app)
@@ -74,6 +78,7 @@ object Processor {
         val tracked = Store.staged(app).map { it.path }.toSet()
         val done = HashMap<Long, Long>()
         var again = false
+        var added = 0
 
         for (item in fresh) {
             if (item.file?.path in tracked) {
@@ -97,7 +102,8 @@ object Processor {
                     val p = Gallery.track(app, item)
                     if (p == null) Store.log(app, "$label: could not read its file path")
                     else {
-                        Notifier.postAsk(app, p)
+                        added++
+                        if (perPhotoNotify) Notifier.postAsk(app, p)
                         Store.log(app, "$label: added to Inbox")
                     }
                 }
@@ -107,6 +113,6 @@ object Processor {
             done[item.id] = item.addedMs / 1000
         }
         Store.setHandled(app, pruneHandled(handled + done, nowSec))
-        return again
+        return Result(again, added)
     }
 }

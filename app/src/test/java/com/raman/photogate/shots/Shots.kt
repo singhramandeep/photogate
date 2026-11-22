@@ -44,6 +44,7 @@ class Shots {
                 if (discarded) now + (if (i == 4) 200 else 45) * 60_000L else 0L))
         }
         folders.forEach { Store.setFolder(c, it, true) }
+        Store.setFlag(c, "onboarded")
         Store.addApproved(c, Photo(101, File(dir, "p0.jpg").path, "p0.jpg", "DCIM/Camera/", false, now, category = "Camera"))
         Store.addApproved(c, Photo(102, File(dir, "p1.jpg").path, "p1.jpg", "Pictures/Screenshots/", false, now - 5, category = "Screenshots", auto = true))
         Store.addApproved(c, Photo(103, File(dir, "p3.jpg").path, "p3.jpg", "Pictures/WhatsApp/", false, now - 9, category = "Social", auto = true))
@@ -58,7 +59,14 @@ class Shots {
         override fun askNotifications() {}
         override fun openGallery() {}
         override fun scanNow() {}
+        override fun openBatterySettings() {}
     }
+
+    @Test fun onboardingWelcome() { shot { Onboarding(noop, 0) {} } }
+    @Test fun onboardingHow() { shot { Onboarding(noop, 1) {} } }
+    @Test fun onboardingPermissions() { Gallery.previewAccess = false; shot { Onboarding(noop, 2) {} } }
+    @Test fun onboardingFrequency() { shot { Onboarding(noop, 4) {} } }
+    @Test fun inboxSelecting() { fixtures(); Store.setThumbDp(ctx, 70); shot { InboxScreen {} } }
 
     @Test fun uploaded() { fixtures(); shot { UploadedScreen() } }
 

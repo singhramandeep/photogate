@@ -149,9 +149,32 @@ object Store {
 
     fun refresh() = bump()
 
+    // ---- how often the watched folders are checked (minutes, 0 = immediately) ----
+    fun checkFreqMin(c: Context): Int = p(c).getInt("checkFreqMin", 0)
+    fun setCheckFreqMin(c: Context, m: Int) {
+        p(c).edit().putInt("checkFreqMin", m).apply()
+        bump()
+    }
+
+    // ---- thumbnail size in the grids (dp), changed by pinching ----
+    fun thumbDp(c: Context): Int = p(c).getInt("thumbDp", 110)
+    fun setThumbDp(c: Context, dp: Int) {
+        p(c).edit().putInt("thumbDp", dp).apply()
+        bump()
+    }
+
     fun flag(c: Context, name: String): Boolean = p(c).getBoolean("flag:$name", false)
     fun setFlag(c: Context, name: String) {
         p(c).edit().putBoolean("flag:$name", true).apply()
+        bump()
+    }
+
+    /** Clears every flag whose name starts with [prefix] (e.g. "tip:" brings all tips back). */
+    fun clearFlags(c: Context, prefix: String) {
+        val e = p(c).edit()
+        p(c).all.keys.filter { it.startsWith("flag:$prefix") }.forEach { e.remove(it) }
+        e.apply()
+        bump()
     }
 
     // ---- activity log shown in Settings, to see what the scanner did ----

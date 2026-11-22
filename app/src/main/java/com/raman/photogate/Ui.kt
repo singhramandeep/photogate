@@ -1,6 +1,16 @@
 package com.raman.photogate
 
 import android.graphics.Bitmap
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -120,6 +130,7 @@ interface Actions {
     fun askNotifications()
     fun openGallery()
     fun scanNow()
+    fun openBatterySettings()
 }
 
 /** Runs a file action off the main thread (moving a big video can take a moment). */
@@ -147,6 +158,11 @@ private fun rememberNow(): Long {
 fun App(act: Actions) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
+    val onboarded = remember(tick) { Store.flag(c, "onboarded") }
+    if (!onboarded) {
+        Onboarding(act) { Store.setFlag(c, "onboarded") }
+        return
+    }
     var tab by remember { mutableIntStateOf(0) }
     val all = remember(tick) { Store.staged(c) }
     val inbox = all.count { !it.discarded }
@@ -200,17 +216,14 @@ private fun Header() {
     val tick = Store.tick.intValue
     val access = remember(tick) { Gallery.hasAccess() }
     val sources = remember(tick) { Store.folders(c).size }
+    val freq = remember(tick) { Store.checkFreqMin(c) }
     val watching = access && sources > 0
 
     Row(
         Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF4F46E5), Color(0xFF0F766E)))),
-            contentAlignment = Alignment.Center,
-        ) { Text("PG", color = Color.White, fontWeight = FontWeight.Bold) }
+        Logo(36)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text("PhotoGate", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
@@ -222,7 +235,8 @@ private fun Header() {
                 Spacer(Modifier.width(6.dp))
                 Text(
                     when {
-                        watching -> "Watching $sources folder${if (sources == 1) "" else "s"}"
+                        watching -> "$sources folder${if (sources == 1) "" else "s"} · checked " +
+                            Scheduler.label(freq).replaceFirstChar { it.lowercase() }
                         !access -> "Paused · allow access in Settings"
                         else -> "Paused · turn on a folder in Sources"
                     },
@@ -231,6 +245,20 @@ private fun Header() {
                 )
             }
         }
+    }
+}
+
+@Composable
+internal fun Logo(sizeDp: Int) {
+    Box(
+        Modifier.size(sizeDp.dp).clip(RoundedCornerShape((sizeDp / 3.6).dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF4F46E5), Color(0xFF0F766E)))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "PG", color = Color.White, fontWeight = FontWeight.Bold,
+            style = if (sizeDp > 50) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.bodyLarge,
+        )
     }
 }
 
@@ -267,6 +295,27 @@ private fun EmptyState(title: String, body: String, action: String? = null, onAc
     }
 }
 
+/** A one-time hint (the "tour"): shown until the user taps Got it. Settings > Show the guide again brings them back. */
+@Composable
+internal fun Tip(key: String, text: String) {
+    val c = LocalContext.current
+    val tick = Store.tick.intValue
+    val seen = remember(tick) { Store.flag(c, "tip:$key") }
+    if (seen) return
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+    ) {
+        Row(Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("💡", modifier = Modifier.padding(end = 10.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.weight(1f))
+            TextButton(onClick = { Store.setFlag(c, "tip:$key") }) { Text("Got it") }
+        }
+    }
+}
+
 // ================================================================ photo tiles
 
 @Composable
@@ -282,34 +331,183 @@ private fun Thumb(p: Photo, px: Int, modifier: Modifier, scale: ContentScale = C
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Tile(p: Photo, topTag: (@Composable () -> Unit)?, onClick: () -> Unit) {
+private fun Tile(
+    p: Photo, topTag: (@Composable () -> Unit)?, selecting: Boolean, selected: Boolean, small: Boolean,
+    onClick: () -> Unit, onLongClick: () -> Unit,
+) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val cat = remember(tick, p.from, p.category, p.path) {
         when {
             p.category.isNotEmpty() -> p.category
-            p.path.contains("/" + Gallery.FOLDER) -> "PhotoGate" // approved before categories existed
+            p.path.contains("/" + Gallery.FOLDER) -> "PhotoGate" // uploaded before categories existed
             else -> Store.categoryOf(c, p.from)
         }
     }
-    Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)) {
+    val corner = if (small) 6.dp else 14.dp
+    Box(
+        Modifier.aspectRatio(1f).clip(RoundedCornerShape(corner))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    ) {
         Thumb(p, 400, Modifier.fillMaxSize())
-        Box(
-            Modifier.fillMaxWidth().height(44.dp).align(Alignment.BottomCenter)
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xAA000000))))
-        )
-        Row(
-            Modifier.align(Alignment.BottomStart).padding(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (p.isVideo) {
-                Text("▶ ", color = Color.White, style = MaterialTheme.typography.labelSmall)
+        if (!small) {
+            Box(
+                Modifier.fillMaxWidth().height(44.dp).align(Alignment.BottomCenter)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xAA000000))))
+            )
+            Row(Modifier.align(Alignment.BottomStart).padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (p.isVideo) Text("▶ ", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Pill(cat, Color(0x33FFFFFF), Color.White)
             }
-            Pill(cat, Color(0x33FFFFFF), Color.White)
+            if (topTag != null && !selecting) Box(Modifier.align(Alignment.TopStart).padding(6.dp)) { topTag() }
+        } else if (p.isVideo) {
+            Text("▶", color = Color.White, style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.align(Alignment.BottomStart).padding(4.dp))
         }
-        if (topTag != null) Box(Modifier.align(Alignment.TopStart).padding(6.dp)) { topTag() }
+        if (selected) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)))
+        }
+        if (selecting) {
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp).clip(CircleShape)
+                    .background(if (selected) MaterialTheme.colorScheme.primary else Color(0x66000000)),
+                contentAlignment = Alignment.Center,
+            ) { if (selected) Text("✓", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+        }
     }
+}
+
+/** Two-finger pinch changes [size]; one finger still scrolls the grid. */
+private fun Modifier.pinchToResize(size: () -> Float, onSize: (Float) -> Unit, onEnd: () -> Unit): Modifier =
+    pointerInput(Unit) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            var pinched = false
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.changes.count { it.pressed } >= 2) {
+                    pinched = true
+                    val zoom = event.calculateZoom()
+                    if (zoom != 1f) onSize((size() * zoom).coerceIn(MIN_THUMB, MAX_THUMB))
+                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                }
+            } while (event.changes.any { it.pressed })
+            if (pinched) onEnd()
+        }
+    }
+
+private const val MIN_THUMB = 56f
+private const val MAX_THUMB = 280f
+
+/** One bulk action on the selected photos. [confirm]: ask first (for anything that deletes). */
+private class Bulk(val label: String, val danger: Boolean = false, val confirm: String? = null, val run: (List<Long>) -> Unit)
+
+/**
+ * The photo grid used by Inbox, Uploaded and Bin: pinch to resize thumbnails, long-press to start selecting,
+ * then tap to add or remove; a bar at the bottom runs [bulk] actions on the selection.
+ */
+@Composable
+private fun PhotoGrid(
+    list: List<Photo>,
+    bulk: List<Bulk>,
+    onOpen: (Photo) -> Unit,
+    topTag: (Photo) -> (@Composable () -> Unit)? = { null },
+    header: @Composable () -> Unit,
+) {
+    val c = LocalContext.current
+    val run = rememberRunner()
+    var size by remember { mutableFloatStateOf(Store.thumbDp(c).toFloat()) }
+    var picked by remember { mutableStateOf(setOf<Long>()) }
+    val selected = picked intersect list.map { it.id }.toSet() // drop photos that left this list
+    val selecting = selected.isNotEmpty()
+    var confirming by remember { mutableStateOf<Bulk?>(null) }
+    BackHandler(enabled = selecting) { picked = emptySet() }
+    fun toggle(id: Long) {
+        picked = if (id in selected) selected - id else selected + id
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(size.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (size < 80) 3.dp else 8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (size < 80) 3.dp else 8.dp),
+            contentPadding = PaddingValues(16.dp),
+            modifier = Modifier.weight(1f).fillMaxWidth()
+                .pinchToResize({ size }, { size = it }, { Store.setThumbDp(c, size.toInt()) }),
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) { Column { header() } }
+            items(list, key = { it.id }) { p ->
+                Tile(
+                    p, topTag(p), selecting, p.id in selected, small = size < 80,
+                    onClick = { if (selecting) toggle(p.id) else onOpen(p) },
+                    onLongClick = { toggle(p.id) },
+                )
+            }
+        }
+        if (selecting) {
+            Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp, shadowElevation = 8.dp) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("${selected.size} selected", style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(start = 4.dp))
+                        if (selected.size < list.size) {
+                            TextButton(onClick = { picked = list.map { it.id }.toSet() }) { Text("Select all") }
+                        }
+                        TextButton(onClick = { picked = emptySet() }) { Text("Cancel") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        bulk.forEachIndexed { i, b ->
+                            val go = {
+                                if (b.confirm != null) confirming = b
+                                else {
+                                    val ids = selected.toList()
+                                    picked = emptySet()
+                                    run { b.run(ids) }
+                                }
+                            }
+                            val m = Modifier.weight(1f)
+                            when {
+                                b.danger -> OutlinedButton(onClick = go, modifier = m,
+                                    contentPadding = PaddingValues(horizontal = 6.dp)) {
+                                    Text(b.label, color = MaterialTheme.colorScheme.error, maxLines = 1)
+                                }
+                                i == 0 -> Button(onClick = go, modifier = m, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                                    Text(b.label, maxLines = 1)
+                                }
+                                else -> FilledTonalButton(onClick = go, modifier = m,
+                                    contentPadding = PaddingValues(horizontal = 6.dp)) { Text(b.label, maxLines = 1) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    confirming?.let { b ->
+        AlertDialog(
+            onDismissRequest = { confirming = null },
+            title = { Text(b.confirm!!.replace("%d", selected.size.toString())) },
+            text = { Text("This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val ids = selected.toList()
+                    confirming = null
+                    picked = emptySet()
+                    run { b.run(ids) }
+                }) { Text(b.label, color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun GridIntro(text: String) {
+    Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(8.dp))
 }
 
 // ================================================================ Inbox
@@ -318,32 +516,31 @@ private fun Tile(p: Photo, topTag: (@Composable () -> Unit)?, onClick: () -> Uni
 fun InboxScreen(goToSources: () -> Unit) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val run = rememberRunner()
     val list = remember(tick) { Store.staged(c).filter { !it.discarded }.sortedByDescending { it.seenAt } }
     var reviewing by remember { mutableStateOf<Long?>(null) }
 
-    Column(Modifier.fillMaxSize()) {
     if (list.isEmpty()) {
         EmptyState(
             "All clear",
-            "New photos from your sources wait here for a decision. They stay in their folder until then. " +
+            "New photos from your folders wait here for a decision. They stay in their folder until then. " +
                 "Uploaded ones are in the Uploaded tab, binned ones in the Bin.",
-            "Choose sources", goToSources,
+            "Choose folders", goToSources,
         )
     } else {
-        PhotoGrid(list, header = {
-            Text(
-                "${list.size} waiting · tap one to review",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { run { list.forEach { Gallery.approve(c, it.id) } } }) { Text("Upload all") }
-                OutlinedButton(onClick = { run { list.forEach { Gallery.discard(c, it.id) } } }) { Text("Bin all") }
-            }
-        }) { p -> Tile(p, null) { reviewing = p.id } }
-    }
+        PhotoGrid(
+            list,
+            bulk = listOf(
+                Bulk("Upload") { ids -> ids.forEach { Gallery.approve(c, it) } },
+                Bulk("Bin") { ids -> ids.forEach { Gallery.discard(c, it) } },
+                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone?") { ids ->
+                    ids.forEach { Gallery.deleteNow(c, it) }
+                },
+            ),
+            onOpen = { reviewing = it.id },
+        ) {
+            Tip("inbox", "Tap a photo to review it. Long-press to select several. Pinch with two fingers to resize.")
+            GridIntro("${list.size} waiting · tap to review, long-press to select")
+        }
     }
 
     reviewing?.let { id ->
@@ -371,14 +568,19 @@ fun UploadedScreen() {
                 "Uploaded photos are listed here; Undo puts one back in the Inbox.",
         )
     } else {
-        PhotoGrid(list, header = {
-            Text(
-                "${all.size} uploaded · in DCIM/PhotoGate, synced by your gallery",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        PhotoGrid(
+            list,
+            bulk = listOf(
+                Bulk("Undo upload") { ids -> ids.forEach { Gallery.undoApprove(c, it) } },
+                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone?") { ids ->
+                    ids.forEach { Gallery.deleteApproved(c, it) }
+                },
+            ),
+            onOpen = { reviewing = it.id },
+        ) {
+            Tip("uploaded", "Everything you uploaded is here, by category. Undo upload puts a photo back in the Inbox.")
+            GridIntro("${all.size} uploaded · in DCIM/PhotoGate, synced by your gallery")
             if (cats.size > 1) {
-                Spacer(Modifier.height(4.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text("All") })
                     cats.forEach { cat ->
@@ -386,27 +588,11 @@ fun UploadedScreen() {
                     }
                 }
             }
-        }) { p ->
-            Tile(p, null) { reviewing = p.id }
         }
     }
 
     reviewing?.let { id ->
         Review(list, id, Kind.APPROVED, onClose = { reviewing = null }, onMove = { reviewing = it })
-    }
-}
-
-@Composable
-private fun PhotoGrid(list: List<Photo>, header: @Composable () -> Unit, tile: @Composable (Photo) -> Unit) {
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(110.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(16.dp),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        item(span = { GridItemSpan(maxLineSpan) }) { Column { header() } }
-        items(list, key = { it.id }) { tile(it) }
     }
 }
 
@@ -416,7 +602,6 @@ private fun PhotoGrid(list: List<Photo>, header: @Composable () -> Unit, tile: @
 fun BinScreen() {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val run = rememberRunner()
     val now = rememberNow()
     val list = remember(tick) { Store.staged(c).filter { it.discarded }.sortedBy { it.deleteAt } }
     val after = remember(tick) { Store.deleteAfterMin(c) }
@@ -429,19 +614,20 @@ fun BinScreen() {
                 "Timer: " + delayLabel(after) + " (change it in Settings).",
         )
     } else {
-        PhotoGrid(list, header = {
-            Text(
-                "${list.size} in the Bin · each is deleted from the phone when its ⏱ timer runs out",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = { run { list.forEach { Gallery.deleteNow(c, it.id) } } },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            ) { Text("Delete all now") }
-        }) { p ->
-            Tile(p, topTag = { CountdownTag(p.deleteAt - now) }) { reviewing = p.id }
+        PhotoGrid(
+            list,
+            bulk = listOf(
+                Bulk("Upload") { ids -> ids.forEach { Gallery.approve(c, it) } },
+                Bulk("To Inbox") { ids -> ids.forEach { Gallery.undiscard(c, it) } },
+                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone now?") { ids ->
+                    ids.forEach { Gallery.deleteNow(c, it) }
+                },
+            ),
+            onOpen = { reviewing = it.id },
+            topTag = { p -> { CountdownTag(p.deleteAt - now) } },
+        ) {
+            Tip("bin", "Each photo here is deleted when its ⏱ timer runs out. Changed your mind? Upload or send it back to the Inbox.")
+            GridIntro("${list.size} in the Bin · deleted from the phone when the ⏱ timer runs out")
         }
     }
 
@@ -619,7 +805,7 @@ private fun SourceCard(path: String, count: Int, tracked: Boolean) {
                 }
                 Switch(checked = tracked, onCheckedChange = {
                     Store.setFolder(c, path, it)
-                    MainActivity.syncWatcher(c) // watching runs while at least one folder is on
+                    Scheduler.apply(c) // checking runs while at least one folder is on
                 })
             }
             if (tracked) {
@@ -691,7 +877,7 @@ private fun delayLabel(min: Int) = when (min) {
 }
 
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
+internal fun Section(title: String, content: @Composable () -> Unit) {
     Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(title.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
@@ -702,7 +888,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Line(title: String, sub: String, trailing: @Composable () -> Unit) {
+internal fun Line(title: String, sub: String, trailing: @Composable () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
@@ -715,7 +901,7 @@ private fun Line(title: String, sub: String, trailing: @Composable () -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun <T> Choices(options: List<Pair<T, String>>, selected: T, onPick: (T) -> Unit) {
+internal fun <T> Choices(options: List<Pair<T, String>>, selected: T, onPick: (T) -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         options.forEach { (v, label) ->
             FilterChip(selected = selected == v, onClick = { onPick(v) }, label = { Text(label) })
@@ -728,23 +914,26 @@ fun SettingsScreen(act: Actions) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val deleteAfter = remember(tick) { Store.deleteAfterMin(c) }
-    val hasAccess = remember(tick) { Gallery.hasAccess() }
-    val hasNotif = remember(tick) { runCatching { MainActivity.hasNotifications(c) }.getOrDefault(true) }
+    val freq = remember(tick) { Store.checkFreqMin(c) }
     var showLog by remember { mutableStateOf(false) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Section("Permissions") {
-            Line("All files access", if (hasAccess) "Granted" else "Needed to see new photos and to move or delete them") {
-                if (!hasAccess) Button(onClick = { act.askAccess() }) { Text("Allow") }
-                else Text("✓", color = MaterialTheme.colorScheme.secondary)
+        Section("Permissions") { PermissionLines(act) }
+
+        Section("Check for new photos") {
+            Text("How often PhotoGate looks at your folders", style = MaterialTheme.typography.bodyMedium)
+            Choices(Scheduler.CHOICES, freq) {
+                Store.setCheckFreqMin(c, it)
+                Scheduler.apply(c)
             }
-            Line("Notifications", if (hasNotif) "Granted" else "So each new photo can ask Upload / Bin / Delete now") {
-                if (!hasNotif) Button(onClick = { act.askNotifications() }) { Text("Allow") }
-                else Text("✓", color = MaterialTheme.colorScheme.secondary)
-            }
+            Text(
+                if (freq == 0) "Each new photo gets its own notification with Upload / Bin / Delete now."
+                else "One notification when there are new photos to review. Fewer interruptions, less battery.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         Section("Bin timer") {
@@ -779,6 +968,9 @@ fun SettingsScreen(act: Actions) {
             Line("Activity log", "What PhotoGate saw and did with each new photo") {
                 TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "Hide" else "Show") }
             }
+            Line("Guide", "The welcome guide and the tips on each screen") {
+                TextButton(onClick = { Store.clearFlags(c, "tip:"); Store.clearFlags(c, "onboarded") }) { Text("Show again") }
+            }
             if (showLog) {
                 val lines = remember(tick) { Store.logLines(c).takeLast(25).reversed() }
                 val clip = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -800,5 +992,29 @@ fun SettingsScreen(act: Actions) {
                 }
             }
         }
+    }
+}
+
+/** All files access, notifications and battery: shared by Settings and the welcome guide. */
+@Composable
+internal fun PermissionLines(act: Actions) {
+    val c = LocalContext.current
+    val tick = Store.tick.intValue
+    val hasAccess = remember(tick) { Gallery.hasAccess() }
+    val hasNotif = remember(tick) { runCatching { MainActivity.hasNotifications(c) }.getOrDefault(true) }
+    val battery = remember(tick) { runCatching { MainActivity.batteryUnrestricted(c) }.getOrDefault(false) }
+    val ok = @Composable { Text("✓", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleMedium) }
+    Line("All files access", if (hasAccess) "Granted" else "Needed to see new photos and to move or delete them") {
+        if (!hasAccess) Button(onClick = { act.askAccess() }) { Text("Allow") } else ok()
+    }
+    Line("Notifications", if (hasNotif) "Granted" else "So PhotoGate can tell you about new photos") {
+        if (!hasNotif) Button(onClick = { act.askNotifications() }) { Text("Allow") } else ok()
+    }
+    Line(
+        "Battery: unrestricted",
+        if (battery) "PhotoGate's checks run on time"
+        else "Battery saving can delay checks for hours. Open, tap Battery, choose Unrestricted.",
+    ) {
+        if (!battery) Button(onClick = { act.openBatterySettings() }) { Text("Open") } else ok()
     }
 }

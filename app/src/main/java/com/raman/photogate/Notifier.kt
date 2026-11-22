@@ -10,22 +10,20 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
 object Notifier {
-    const val CH_WATCH = "watch"
     const val CH_ASK = "ask"
     const val ACTION_UPLOAD = "com.raman.photogate.UPLOAD"
     const val ACTION_DISCARD = "com.raman.photogate.DISCARD"
     const val ACTION_DELETE = "com.raman.photogate.DELETE"
     private const val GROUP = "photogate_group"
     private const val SUMMARY_ID = 2
+    private const val REVIEW_ID = 4
 
     /** Per-photo notification id. Offset so a low MediaStore id never collides with 1 (watcher), 2, 3. */
     fun idFor(mediaId: Long): Int = (mediaId % 1_000_000_000L).toInt() + 1000
 
     fun channels(c: Context) {
         val nm = c.getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CH_WATCH, "Watching for new photos", NotificationManager.IMPORTANCE_LOW)
-        )
+        nm.deleteNotificationChannel("watch") // the old permanent "watching" notification is gone
         // LOW = no sound, no pop-over; it waits in the shade
         nm.createNotificationChannel(
             NotificationChannel(CH_ASK, "Upload, Bin or Delete now", NotificationManager.IMPORTANCE_LOW)
@@ -37,15 +35,6 @@ object Notifier {
             c, 0, Intent(c, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
-    fun watching(c: Context): Notification =
-        NotificationCompat.Builder(c, CH_WATCH)
-            .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("PhotoGate is watching for new photos")
-            .setContentText("New photos stay where they are until you decide")
-            .setOngoing(true)
-            .setContentIntent(openApp(c))
-            .build()
 
     private fun action(c: Context, act: String, id: Long): PendingIntent {
         val i = Intent(c, ActionReceiver::class.java).setAction(act).putExtra("id", id)
@@ -87,6 +76,23 @@ object Notifier {
             nm.notify(SUMMARY_ID, summary)
         } catch (e: SecurityException) {
             // notification permission not granted; photos still wait in the Pending tab
+        }
+    }
+
+    /** After a scheduled check: one notification for everything waiting. Tapping it opens the Inbox. */
+    fun postSummary(c: Context, waiting: Int) {
+        if (waiting <= 0) return
+        channels(c)
+        val n = NotificationCompat.Builder(c, CH_ASK)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(if (waiting == 1) "1 new photo to review" else "$waiting photos to review")
+            .setContentText("Open PhotoGate to Upload, Bin or Delete them")
+            .setAutoCancel(true)
+            .setContentIntent(openApp(c))
+            .build()
+        try {
+            NotificationManagerCompat.from(c).notify(REVIEW_ID, n)
+        } catch (e: SecurityException) {
         }
     }
 

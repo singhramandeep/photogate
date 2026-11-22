@@ -35,7 +35,7 @@ class CategoriesTest {
 
     @Test
     fun countdownText() {
-        assertEquals("Deleting now", Categories.deletesIn(0))
+        assertEquals("Due: deleted when you open PhotoGate", Categories.deletesIn(0))
         assertEquals("Deletes in under a minute", Categories.deletesIn(30_000))
         assertEquals("Deletes in 45 min", Categories.deletesIn(45 * 60_000L + 5_000))
         assertEquals("Deletes in 4 h", Categories.deletesIn(4 * 3_600_000L))
@@ -49,7 +49,7 @@ class CategoriesTest {
         assertEquals("3h 20m", Categories.shortLeft(200 * 60_000L))
         assertEquals("24h", Categories.shortLeft(24 * 3_600_000L))
         assertEquals("<1m", Categories.shortLeft(10_000))
-        assertEquals("now", Categories.shortLeft(-5))
+        assertEquals("due", Categories.shortLeft(-5))
     }
 
     @Test
@@ -73,26 +73,9 @@ class CategoriesTest {
     }
 
     @Test
-    fun oldFoldersGetThePrefixOnce() {
-        val sd = tmp.newFolder("sd2")
-        val gate = Gate(File(sd, "DCIM/PhotoGate"))
-        val cam = File(gate.root, "Camera").apply { mkdirs() }
-        File(cam, "a.jpg").writeText("a")
-        File(gate.root, "pScreenshots").apply { mkdirs() }.let { File(it, "s.png").writeText("s") }
-        // a clash: pSocial already has b.jpg and old Social has another b.jpg
-        File(gate.root, "pSocial").apply { mkdirs() }.let { File(it, "b.jpg").writeText("new") }
-        File(gate.root, "Social").apply { mkdirs() }.let { File(it, "b.jpg").writeText("old") }
-        File(gate.root, ".staging").mkdirs()
-
-        val moved = gate.prefixOldFolders()
-        assertEquals(File(gate.root, "pCamera/a.jpg").path, moved[File(cam, "a.jpg").path])
-        assertEquals("a", File(gate.root, "pCamera/a.jpg").readText())
-        assertEquals("old", File(gate.root, "pSocial/b (1).jpg").readText())
-        assertEquals("new", File(gate.root, "pSocial/b.jpg").readText())
-        assertEquals(false, cam.exists())
-        assertEquals(false, File(gate.root, "Social").exists())
-        assertEquals("prefixed and hidden folders are left alone", true, File(gate.root, "pScreenshots/s.png").exists())
-        assertEquals(true, File(gate.root, ".staging").exists())
-        assertEquals("second run does nothing", emptyMap<String, String>(), gate.prefixOldFolders())
+    fun uploadTargetFolders() {
+        assertEquals("DCIM/PhotoGate/pCamera/", Gallery.targetFolder("Camera"))
+        assertEquals("DCIM/PhotoGate/pFamily trip/", Gallery.targetFolder(" Family  trip "))
+        assertEquals("DCIM/PhotoGate/", Gallery.targetFolder("   "))
     }
 }

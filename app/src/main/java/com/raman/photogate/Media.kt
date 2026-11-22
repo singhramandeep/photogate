@@ -1,7 +1,11 @@
 package com.raman.photogate
 
+import android.Manifest
 import android.content.Context
 import android.content.ContentUris
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.media.ThumbnailUtils
@@ -20,7 +24,7 @@ data class Item(
     val addedMs: Long,
     /** Last write to the file. For a long video this is when recording stopped, not when it started. */
     val modifiedMs: Long = addedMs,
-    /** Real file on disk (readable with All files access). */
+    /** Real file on disk (readable with the photos permission; changed only through MediaStore). */
     val file: File? = null,
 )
 
@@ -39,8 +43,22 @@ object Media {
         @Suppress("DEPRECATION") MediaStore.Files.FileColumns.DATA,
     )
 
-    /** All files access covers reading MediaStore and moving the files. */
-    fun hasPermission(@Suppress("UNUSED_PARAMETER") c: Context): Boolean = Gallery.hasAccess()
+    /** Runtime permissions: READ_MEDIA_* from Android 13 (plus "selected photos" from 14), READ_EXTERNAL_STORAGE before. */
+    fun permissions(): Array<String> = when {
+        Build.VERSION.SDK_INT >= 34 -> arrayOf(
+            Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+        )
+        Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+        else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+
+    /** Full access to photos (not just "selected photos"), so new ones can be seen. */
+    fun hasPermission(c: Context): Boolean {
+        val perm = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES
+        else Manifest.permission.READ_EXTERNAL_STORAGE
+        return ContextCompat.checkSelfPermission(c, perm) == PackageManager.PERMISSION_GRANTED
+    }
 
     private fun toItem(cur: Cursor): Item {
         val id = cur.getLong(0)
@@ -82,6 +100,14 @@ object Media {
             "${MediaStore.Files.FileColumns.DATE_ADDED} >= ? AND ${MediaStore.Files.FileColumns._ID} > ?",
             arrayOf(sinceSec.toString(), afterId.toString()),
         )
+
+    /** Everything MediaStore has in [relPath] and its subfolders, oldest first. */
+    fun under(c: Context, relPath: String): List<Item> =
+        query(c, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ?", arrayOf("$relPath%"))
+
+    @Suppress("DEPRECATION")
+    fun byPath(c: Context, path: String): Item? =
+        query(c, "${MediaStore.Files.FileColumns.DATA} = ?", arrayOf(path)).firstOrNull()
 
     fun byId(c: Context, id: Long): Item? =
         query(c, "${MediaStore.Files.FileColumns._ID} = ?", arrayOf(id.toString())).firstOrNull()

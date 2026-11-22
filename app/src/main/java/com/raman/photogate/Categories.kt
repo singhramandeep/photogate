@@ -50,7 +50,7 @@ object Categories {
     fun shortLeft(ms: Long): String {
         val min = ms / 60_000
         return when {
-            ms <= 0 -> "now"
+            ms <= 0 -> "due"
             min < 1 -> "<1m"
             min < 60 -> "${min}m"
             min % 60 == 0L -> "${min / 60}h"
@@ -62,7 +62,7 @@ object Categories {
     fun deletesIn(ms: Long): String {
         val min = ms / 60_000
         return when {
-            ms <= 0 -> "Deleting now"
+            ms <= 0 -> "Due: deleted when you open PhotoGate"
             min < 1 -> "Deletes in under a minute"
             min < 60 -> "Deletes in $min min"
             min % 60 == 0L -> "Deletes in ${min / 60} h"

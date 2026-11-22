@@ -14,9 +14,11 @@ object Notifier {
     const val ACTION_UPLOAD = "com.raman.photogate.UPLOAD"
     const val ACTION_DISCARD = "com.raman.photogate.DISCARD"
     const val ACTION_DELETE = "com.raman.photogate.DELETE"
+    const val ACTION_SWEEP = "com.raman.photogate.SWEEP"
     private const val GROUP = "photogate_group"
     private const val SUMMARY_ID = 2
     private const val REVIEW_ID = 4
+    private const val DUE_ID = 5
 
     /** Per-photo notification id. Offset so a low MediaStore id never collides with 1 (watcher), 2, 3. */
     fun idFor(mediaId: Long): Int = (mediaId % 1_000_000_000L).toInt() + 1000
@@ -36,12 +38,32 @@ object Notifier {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+    /** Buttons open an invisible screen, because Android only lets an app change photos while it is on screen. */
     private fun action(c: Context, act: String, id: Long): PendingIntent {
-        val i = Intent(c, ActionReceiver::class.java).setAction(act).putExtra("id", id)
-        return PendingIntent.getBroadcast(
+        val i = Intent(c, ActionActivity::class.java).setAction(act).putExtra("id", id)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        return PendingIntent.getActivity(
             c, idFor(id), i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
+
+    /** Bin timers ran out while PhotoGate was closed: one tap deletes them. */
+    fun postDue(c: Context, count: Int) {
+        channels(c)
+        val n = NotificationCompat.Builder(c, CH_ASK)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(if (count == 1) "1 photo in the Bin is due" else "$count photos in the Bin are due")
+            .setContentText("Tap to delete them from the phone")
+            .setAutoCancel(true)
+            .setContentIntent(action(c, ACTION_SWEEP, -7))
+            .build()
+        try {
+            NotificationManagerCompat.from(c).notify(DUE_ID, n)
+        } catch (e: SecurityException) {
+        }
+    }
+
+    fun cancelDue(c: Context) = NotificationManagerCompat.from(c).cancel(DUE_ID)
 
     fun postAsk(c: Context, item: Photo) {
         channels(c)

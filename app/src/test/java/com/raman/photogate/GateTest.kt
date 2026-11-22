@@ -53,7 +53,7 @@ class GateTest {
     fun noHiddenFolderIsCreated() {
         val (sd, gate) = phone()
         gate.approve(photo(File(sd, "DCIM/Camera"), "a.jpg"))
-        assertFalse(gate.oldStaging.exists())
+        assertFalse(File(gate.root, ".staging").exists())
         assertEquals(listOf("a.jpg"), gate.root.list()!!.toList())
     }
 
@@ -90,18 +90,6 @@ class GateTest {
     fun missingOriginalIsAnError() {
         val (sd, gate) = phone()
         gate.approve(File(sd, "DCIM/Camera/nope.jpg"))
-    }
-
-    @Test
-    fun oldStagedPhotoGoesBackToItsFolder() {
-        val (sd, gate) = phone()
-        val staged = photo(gate.oldStaging, "IMG_9.jpg", "data".toByteArray())
-        photo(File(sd, "DCIM/Camera"), "IMG_9.jpg", "other".toByteArray()) // a clash in the original folder
-        val back = Gate.move(staged, Gate.unique(File(sd, "DCIM/Camera"), "IMG_9.jpg"))
-        assertFalse(staged.exists())
-        assertEquals(File(sd, "DCIM/Camera/IMG_9 (1).jpg"), back)
-        assertEquals("data", back.readText())
-        assertEquals(1_700_000_000_000L, back.lastModified())
     }
 
     @Test

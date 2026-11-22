@@ -30,7 +30,7 @@ object Scheduler {
     fun label(min: Int): String = CHOICES.firstOrNull { it.first == min }?.second ?: "Every ${min / 60} h"
 
     /** Checking runs while access is granted and at least one folder is switched on. */
-    fun active(c: Context): Boolean = Gallery.hasAccess() && Store.folders(c).isNotEmpty()
+    fun active(c: Context): Boolean = Gallery.hasAccess(c) && Store.folders(c).isNotEmpty()
 
     /** Puts the right background job in place for the current settings (safe to call often). */
     fun apply(c: Context) {
@@ -82,7 +82,7 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             delay(Processor.SETTLE_MS + 500)
         }
         if (periodic && added > 0) Notifier.postSummary(c, Store.staged(c).count { !it.discarded })
-        runCatching { Gallery.sweep(c) }
+        runCatching { Gallery.tidy(c) }
         if (!periodic && Store.checkFreqMin(c) == 0 && Scheduler.active(c)) Scheduler.armInstant(c, replace = true)
         return Result.success()
     }

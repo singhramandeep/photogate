@@ -64,7 +64,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -126,12 +128,25 @@ fun PhotoGateTheme(content: @Composable () -> Unit) {
 
 /** What the screens need from the Activity (an interface so screens can be previewed without one). */
 interface Actions {
-    fun askAccess()
+    fun askPhotos()
     fun askNotifications()
+    fun askManageMedia()
     fun openGallery()
     fun scanNow()
     fun openBatterySettings()
+
+    // changes to photos: Android may ask the user first (see Edits)
+    fun upload(ids: List<Long>)
+    fun bin(ids: List<Long>)
+    fun toInbox(ids: List<Long>)
+    fun deleteNow(ids: List<Long>)
+    fun undoUpload(ids: List<Long>)
+    fun deleteUploaded(ids: List<Long>)
+    fun sweep()
 }
+
+/** The Activity's [Actions], for any screen that needs them. */
+val LocalActions = staticCompositionLocalOf<Actions> { error("No Actions provided") }
 
 /** Runs a file action off the main thread (moving a big video can take a moment). */
 @Composable
@@ -156,6 +171,12 @@ private fun rememberNow(): Long {
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun App(act: Actions) {
+    CompositionLocalProvider(LocalActions provides act) { AppContent(act) }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun AppContent(act: Actions) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val onboarded = remember(tick) { Store.flag(c, "onboarded") }
@@ -214,7 +235,7 @@ private fun TabLabel(text: String, count: Int, selected: Boolean, quiet: Boolean
 private fun Header() {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val access = remember(tick) { Gallery.hasAccess() }
+    val access = remember(tick) { Gallery.hasAccess(c) }
     val sources = remember(tick) { Store.folders(c).size }
     val freq = remember(tick) { Store.checkFreqMin(c) }
     val watching = access && sources > 0
@@ -464,7 +485,7 @@ private fun PhotoGrid(
                                 else {
                                     val ids = selected.toList()
                                     picked = emptySet()
-                                    run { b.run(ids) }
+                                    b.run(ids)
                                 }
                             }
                             val m = Modifier.weight(1f)
@@ -496,7 +517,7 @@ private fun PhotoGrid(
                     val ids = selected.toList()
                     confirming = null
                     picked = emptySet()
-                    run { b.run(ids) }
+                    b.run(ids)
                 }) { Text(b.label, color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
@@ -514,6 +535,7 @@ private fun GridIntro(text: String) {
 
 @Composable
 fun InboxScreen(goToSources: () -> Unit) {
+    val act = LocalActions.current
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val list = remember(tick) { Store.staged(c).filter { !it.discarded }.sortedByDescending { it.seenAt } }
@@ -530,11 +552,9 @@ fun InboxScreen(goToSources: () -> Unit) {
         PhotoGrid(
             list,
             bulk = listOf(
-                Bulk("Upload") { ids -> ids.forEach { Gallery.approve(c, it) } },
-                Bulk("Bin") { ids -> ids.forEach { Gallery.discard(c, it) } },
-                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone?") { ids ->
-                    ids.forEach { Gallery.deleteNow(c, it) }
-                },
+                Bulk("Upload") { ids -> act.upload(ids) },
+                Bulk("Bin") { ids -> act.bin(ids) },
+                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone?") { ids -> act.deleteNow(ids) },
             ),
             onOpen = { reviewing = it.id },
         ) {
@@ -553,6 +573,7 @@ fun InboxScreen(goToSources: () -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun UploadedScreen() {
+    val act = LocalActions.current
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val all = remember(tick) { Store.approved(c).sortedByDescending { it.seenAt } }
@@ -571,10 +592,8 @@ fun UploadedScreen() {
         PhotoGrid(
             list,
             bulk = listOf(
-                Bulk("Undo upload") { ids -> ids.forEach { Gallery.undoApprove(c, it) } },
-                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone?") { ids ->
-                    ids.forEach { Gallery.deleteApproved(c, it) }
-                },
+                Bulk("Undo upload") { ids -> act.undoUpload(ids) },
+                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone?") { ids -> act.deleteUploaded(ids) },
             ),
             onOpen = { reviewing = it.id },
         ) {
@@ -600,6 +619,7 @@ fun UploadedScreen() {
 
 @Composable
 fun BinScreen() {
+    val act = LocalActions.current
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val now = rememberNow()
@@ -617,16 +637,31 @@ fun BinScreen() {
         PhotoGrid(
             list,
             bulk = listOf(
-                Bulk("Upload") { ids -> ids.forEach { Gallery.approve(c, it) } },
-                Bulk("To Inbox") { ids -> ids.forEach { Gallery.undiscard(c, it) } },
-                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone now?") { ids ->
-                    ids.forEach { Gallery.deleteNow(c, it) }
-                },
+                Bulk("Upload") { ids -> act.upload(ids) },
+                Bulk("To Inbox") { ids -> act.toInbox(ids) },
+                Bulk("Delete", danger = true, confirm = "Delete %d photos from the phone now?") { ids -> act.deleteNow(ids) },
             ),
             onOpen = { reviewing = it.id },
             topTag = { p -> { CountdownTag(p.deleteAt - now) } },
         ) {
             Tip("bin", "Each photo here is deleted when its ⏱ timer runs out. Changed your mind? Upload or send it back to the Inbox.")
+            val due = list.count { it.deleteAt <= now }
+            if (due > 0) {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                ) {
+                    Row(Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "$due photo${if (due == 1) " is" else "s are"} due for deletion",
+                            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        )
+                        TextButton(onClick = { act.sweep() }) { Text("Delete now") }
+                    }
+                }
+            }
             GridIntro("${list.size} in the Bin · deleted from the phone when the ⏱ timer runs out")
         }
     }
@@ -651,6 +686,7 @@ private enum class Kind { INBOX, APPROVED, BIN }
 @Composable
 private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit, onMove: (Long?) -> Unit) {
     val binMode = kind == Kind.BIN
+    val a = LocalActions.current
     val c = LocalContext.current
     val run = rememberRunner()
     val now = rememberNow()
@@ -665,7 +701,7 @@ private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit,
     val cat = remember(p.from, p.category, Store.tick.intValue) { p.category.ifEmpty { Store.categoryOf(c, p.from) } }
     fun act(block: () -> Unit) {
         onMove(next)
-        run { block() }
+        block()
     }
 
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -707,29 +743,29 @@ private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit,
                     )
                     Spacer(Modifier.height(16.dp))
                     if (kind == Kind.APPROVED) {
-                        FilledTonalButton(onClick = { act { Gallery.undoApprove(c, p.id) } }, modifier = Modifier.fillMaxWidth()) {
+                        FilledTonalButton(onClick = { act { a.undoUpload(listOf(p.id)) } }, modifier = Modifier.fillMaxWidth()) {
                             Text("Undo upload")
                         }
-                        TextButton(onClick = { act { Gallery.deleteApproved(c, p.id) } }, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { act { a.deleteUploaded(listOf(p.id)) } }, modifier = Modifier.fillMaxWidth()) {
                             Text("Delete from phone", color = MaterialTheme.colorScheme.error)
                         }
                     } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { act { Gallery.approve(c, p.id) } }, modifier = Modifier.weight(1f)) {
+                        Button(onClick = { act { a.upload(listOf(p.id)) } }, modifier = Modifier.weight(1f)) {
                             Text("Upload")
                         }
                         if (binMode) {
-                            FilledTonalButton(onClick = { act { Gallery.undiscard(c, p.id) } }, modifier = Modifier.weight(1f)) {
+                            FilledTonalButton(onClick = { act { a.toInbox(listOf(p.id)) } }, modifier = Modifier.weight(1f)) {
                                 Text("Back to Inbox")
                             }
                         } else {
-                            FilledTonalButton(onClick = { act { Gallery.discard(c, p.id) } }, modifier = Modifier.weight(1f)) {
+                            FilledTonalButton(onClick = { act { a.bin(listOf(p.id)) } }, modifier = Modifier.weight(1f)) {
                                 Text("Bin")
                             }
                         }
                     }
                     TextButton(
-                        onClick = { act { Gallery.deleteNow(c, p.id) } },
+                        onClick = { act { a.deleteNow(listOf(p.id)) } },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Delete now", color = MaterialTheme.colorScheme.error) }
                     }
@@ -747,7 +783,7 @@ fun SourcesScreen(preview: List<Pair<String, Int>>? = null) {
     val tick = Store.tick.intValue
     var folders by remember { mutableStateOf(preview ?: emptyList()) }
     var reload by remember { mutableIntStateOf(0) }
-    val hasPerm = remember(tick) { Gallery.hasAccess() }
+    val hasPerm = remember(tick) { Gallery.hasAccess(c) }
     LaunchedEffect(reload, hasPerm) {
         if (preview != null) return@LaunchedEffect
         folders = withContext(Dispatchers.IO) {
@@ -760,7 +796,7 @@ fun SourcesScreen(preview: List<Pair<String, Int>>? = null) {
     val sorted = folders.sortedWith(compareByDescending<Pair<String, Int>> { it.first in on }.thenByDescending { it.second })
 
     if (!hasPerm) {
-        EmptyState("No access yet", "Allow All files access in Settings so PhotoGate can see your folders.")
+        EmptyState("No access yet", "Allow Photos and videos in Settings so PhotoGate can see your folders.")
         return
     }
     LazyColumn(
@@ -995,17 +1031,35 @@ fun SettingsScreen(act: Actions) {
     }
 }
 
-/** All files access, notifications and battery: shared by Settings and the welcome guide. */
+/** Photos, media management, notifications and battery: shared by Settings and the welcome guide. */
 @Composable
 internal fun PermissionLines(act: Actions) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val hasAccess = remember(tick) { Gallery.hasAccess() }
+    val hasAccess = remember(tick) { Gallery.hasAccess(c) }
+    val partial = remember(tick) { runCatching { Gallery.partialAccess(c) }.getOrDefault(false) }
+    val manage = remember(tick) { Gallery.canManageMedia(c) }
     val hasNotif = remember(tick) { runCatching { MainActivity.hasNotifications(c) }.getOrDefault(true) }
     val battery = remember(tick) { runCatching { MainActivity.batteryUnrestricted(c) }.getOrDefault(false) }
     val ok = @Composable { Text("✓", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleMedium) }
-    Line("All files access", if (hasAccess) "Granted" else "Needed to see new photos and to move or delete them") {
-        if (!hasAccess) Button(onClick = { act.askAccess() }) { Text("Allow") } else ok()
+    Line(
+        "Photos and videos",
+        when {
+            hasAccess -> "Allowed"
+            partial -> "Only some photos are allowed. Choose \"Allow all\" so new photos show up."
+            else -> "Needed to see new photos in your folders"
+        },
+    ) {
+        if (!hasAccess) Button(onClick = { act.askPhotos() }) { Text("Allow") } else ok()
+    }
+    if (android.os.Build.VERSION.SDK_INT >= 31) {
+        Line(
+            "Media management",
+            if (manage) "Upload, Bin and Delete work without a confirmation each time"
+            else "Optional. Without it Android asks you to confirm each upload or delete.",
+        ) {
+            if (!manage) Button(onClick = { act.askManageMedia() }) { Text("Allow") } else ok()
+        }
     }
     Line("Notifications", if (hasNotif) "Granted" else "So PhotoGate can tell you about new photos") {
         if (!hasNotif) Button(onClick = { act.askNotifications() }) { Text("Allow") } else ok()

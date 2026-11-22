@@ -22,7 +22,9 @@ class Shots {
 
     private fun shot(dark: Boolean = false, content: @androidx.compose.runtime.Composable () -> Unit) {
         if (dark) paparazzi.unsafeUpdateConfig(DeviceConfig.PIXEL_6.copy(nightMode = NightMode.NIGHT))
-        paparazzi.snapshot { CompositionLocalProvider(LocalContext provides ctx) { PhotoGateTheme { content() } } }
+        paparazzi.snapshot {
+            CompositionLocalProvider(LocalContext provides ctx, LocalActions provides noop) { PhotoGateTheme { content() } }
+        }
     }
 
     private fun fixtures() {
@@ -45,6 +47,7 @@ class Shots {
         }
         folders.forEach { Store.setFolder(c, it, true) }
         Store.setFlag(c, "onboarded")
+        Gallery.previewAccess = true
         Store.addApproved(c, Photo(101, File(dir, "p0.jpg").path, "p0.jpg", "DCIM/Camera/", false, now, category = "Camera"))
         Store.addApproved(c, Photo(102, File(dir, "p1.jpg").path, "p1.jpg", "Pictures/Screenshots/", false, now - 5, category = "Screenshots", auto = true))
         Store.addApproved(c, Photo(103, File(dir, "p3.jpg").path, "p3.jpg", "Pictures/WhatsApp/", false, now - 9, category = "Social", auto = true))
@@ -55,8 +58,16 @@ class Shots {
     @Test fun binDark() { fixtures(); shot(dark = true) { BinScreen() } }
     @Test fun emptyInbox() { shot { InboxScreen {} } }
     private val noop = object : Actions {
-        override fun askAccess() {}
+        override fun askPhotos() {}
         override fun askNotifications() {}
+        override fun askManageMedia() {}
+        override fun upload(ids: List<Long>) {}
+        override fun bin(ids: List<Long>) {}
+        override fun toInbox(ids: List<Long>) {}
+        override fun deleteNow(ids: List<Long>) {}
+        override fun undoUpload(ids: List<Long>) {}
+        override fun deleteUploaded(ids: List<Long>) {}
+        override fun sweep() {}
         override fun openGallery() {}
         override fun scanNow() {}
         override fun openBatterySettings() {}

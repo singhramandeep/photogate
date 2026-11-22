@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -17,8 +18,18 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity(), Actions {
 
+    private val edits = Edits(this)
+
     private val notifLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { Store.refresh() }
+
+    private val photosLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            Store.refresh()
+            Scheduler.apply(this)
+            // asked before, and said "don't ask again": only the settings page can change it now
+            if (!Media.hasPermission(this) && !shouldShowRequestPermissionRationale(Media.permissions().first())) openAppSettings()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -29,17 +40,15 @@ class MainActivity : ComponentActivity(), Actions {
 
     override fun onResume() {
         super.onResume()
-        // back from the All files access screen, or from anywhere else: refresh screens
+        // back from a settings screen, or from anywhere else: refresh screens
         Store.refresh()
         Scheduler.apply(this) // checking runs by itself while access is granted and a folder is on
         val app = applicationContext
         Thread {
             scanUntilSettled(app, "App opened")
-            try {
-                Gallery.sweep(app) // deletions that came due while the phone was off
-            } catch (e: Throwable) {
-                Store.log(app, "Cleanup failed: $e")
-            }
+            runCatching { Gallery.tidy(app) }.onFailure { Store.log(app, "Cleanup failed: $it") }
+            // Bin timers that ran out: with Media management this needs no confirmation, so just do it
+            if (Gallery.canManageMedia(app) && Gallery.dueIds(app).isNotEmpty()) runOnUiThread { sweep() }
         }.start()
     }
 
@@ -54,22 +63,34 @@ class MainActivity : ComponentActivity(), Actions {
         while (Processor.scanSafely(app, why).again && tries++ < 5) Thread.sleep(Processor.SETTLE_MS + 500)
     }
 
-    override fun askAccess() {
-        try {
-            startActivity(Gallery.accessIntent(this))
-        } catch (e: ActivityNotFoundException) {
-            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-        }
+    // ---- permissions
+
+    override fun askPhotos() {
+        if (Gallery.partialAccess(this)) openAppSettings() else photosLauncher.launch(Media.permissions())
     }
 
     override fun askNotifications() {
         if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
+    override fun askManageMedia() {
+        Gallery.manageMediaIntent(this)?.let {
+            try {
+                startActivity(it)
+            } catch (e: ActivityNotFoundException) {
+                openAppSettings()
+            }
+        }
+    }
+
+    private fun openAppSettings() {
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+    }
+
     /** App info page: on Samsung, Battery > Unrestricted. Needs no special permission (Play-safe). */
     override fun openBatterySettings() {
         try {
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
+            openAppSettings()
             Toast.makeText(this, "Tap Battery, then choose Unrestricted", Toast.LENGTH_LONG).show()
         } catch (e: ActivityNotFoundException) {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
@@ -81,6 +102,16 @@ class MainActivity : ComponentActivity(), Actions {
             ?: packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
         if (i != null) startActivity(i) else Toast.makeText(this, "No gallery app found", Toast.LENGTH_SHORT).show()
     }
+
+    // ---- photo actions (Android may ask the user first; see Edits)
+
+    override fun upload(ids: List<Long>) = edits.upload(ids)
+    override fun bin(ids: List<Long>) = edits.bin(ids)
+    override fun toInbox(ids: List<Long>) = ids.forEach { Gallery.toInbox(this, it) }
+    override fun deleteNow(ids: List<Long>) = edits.deleteStaged(ids)
+    override fun undoUpload(ids: List<Long>) = edits.undoUpload(ids)
+    override fun deleteUploaded(ids: List<Long>) = edits.deleteUploaded(ids)
+    override fun sweep() = edits.sweep { Notifier.cancelDue(this) }
 
     companion object {
         /** True when Android will not hold back PhotoGate's background checks to save battery. */

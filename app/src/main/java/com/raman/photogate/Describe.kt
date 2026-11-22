@@ -1,5 +1,7 @@
 package com.raman.photogate
 
+import android.content.Context
+import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
 
@@ -29,7 +31,28 @@ object Describe {
         return "$old | $category"
     }
 
-    /** True if the description was written. Failure is harmless: the photo is already in its category folder. */
+    /**
+     * Writes through MediaStore (PhotoGate has write access to [uri] at this point, not to the file path).
+     * True if the description was written. Failure is harmless: the photo is already in its category folder.
+     */
+    fun write(c: Context, uri: Uri, f: File, category: String): Boolean {
+        if (!supports(f)) return false
+        return try {
+            c.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                val exif = ExifInterface(pfd.fileDescriptor)
+                exif.setAttribute(
+                    ExifInterface.TAG_IMAGE_DESCRIPTION,
+                    merge(exif.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION), category),
+                )
+                exif.saveAttributes()
+                true
+            } ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Same, straight on a file (used by tests). */
     fun write(f: File, category: String): Boolean {
         if (!supports(f)) return false
         return try {

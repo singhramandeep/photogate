@@ -2,12 +2,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- "All files access": move new photos out of Camera etc. into PhotoGate without a prompt per photo.
-         Granted by the user in system settings. Fine for a sideloaded app; Play Store would need a review. -->
+    <!-- Read photos and videos: Android 11-12 -->
     <uses-permission
-        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- Android 13+ -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Android 14+: lets PhotoGate notice "selected photos only" and ask for full access -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <!-- "Media management" (Android 12+, special app access): move and delete photos without a confirmation each
+         time. Optional; without it Android asks the user per batch. -->
+    <uses-permission android:name="android.permission.MANAGE_MEDIA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- WorkManager adds these for long-running foreground work, which PhotoGate never uses (keeps Play's
+         foreground-service declaration out of the picture) -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE"
+        tools:node="remove" />
 
     <!-- Android 11+ hides other apps unless declared: needed for the "Open" gallery button -->
     <queries>
@@ -30,8 +43,17 @@
             </intent-filter>
         </activity>
 
-        <receiver
-            android:name=".ActionReceiver"
-            android:exported="false" />
+        <!-- invisible screen behind the notification buttons (Android only allows photo changes from a screen) -->
+        <activity
+            android:name=".ActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="false"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            tools:node="remove" />
     </application>
 </manifest>

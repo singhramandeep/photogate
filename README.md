@@ -31,27 +31,26 @@ A welcome guide runs on first launch, and one-time tips explain each screen (Set
 Settings only has: permissions (incl. battery), check frequency, the Bin timer, the sync setup steps, and a
 Troubleshooting section (activity log, guide).
 
-## 1. Build the APK
+## 1. Build
 
-**Option A, GitHub (nothing to install):** create a repo, push this folder to `main`, open the *Actions* tab,
-open the latest "Build APK" run and download the `photogate-apk` artifact.
+- **Sideload APK:** `gradle :app:assembleDebug` (or the `photogate-apk` artifact of the GitHub "Build" workflow).
+  Signed with the bundled `app/photogate.jks`, so new builds install over old ones.
+- **Google Play bundle:** `gradle :app:bundleRelease` with your private upload key configured. Everything about
+  publishing is in [docs/PLAY_STORE.md](docs/PLAY_STORE.md); the privacy policy is [docs/PRIVACY.md](docs/PRIVACY.md).
 
-**Option B, Android Studio / Claude Code on your PC:** open this folder in Android Studio and
-Build > Build APK, or run `gradle :app:assembleRelease` (JDK 17 + Android SDK 35).
-APK: `app/build/outputs/apk/release/app-release.apk`.
+Requires JDK 17 and Android SDK 36.
 
 ## 2. First run
 
-1. Install the APK and open it > Settings > **All files access: Allow**. A system screen opens: switch on
-   PhotoGate, then go back. (Android needs this so the app can move and delete photos that the camera app
-   created without asking you to confirm each one.)
-2. Settings > Notifications: **Allow** (Android 13+).
-3. Sources tab: switch on the folders you want caught (Camera is on by default) and check each one's category.
-   Watching starts by itself (a small permanent notification shows it is running).
-4. Upload one photo so `DCIM/PhotoGate` exists. Then:
-   - Google Photos app > Settings > Backup: turn **off** (it always includes Camera, so it can't be used).
-   - Samsung Gallery > Settings > **Sync with Google Photos** (Cloud sync): choose albums to sync, switch on only the
-     p-folders (pCamera, pScreenshots...), Camera and everything else off.
+The welcome guide walks through it:
+
+1. **Photos and videos:** Allow (choose "Allow all", not "selected photos").
+2. **Media management** (Android 12+, optional): Allow, so Upload / Bin / Delete don't ask for confirmation each time.
+3. **Notifications**, and **Battery: Unrestricted** so background checks aren't delayed.
+4. **Folders:** switch on the ones to watch and check each category.
+5. **How often to check:** immediately, or every 1/2/4/8 hours.
+6. **Sync:** Google Photos app > Backup off. Upload one photo, then Samsung Gallery > Settings > Sync with Google
+   Photos: switch on only the p-folders (pCamera, pScreenshots...), Camera off.
 
 ## Tests
 
@@ -65,9 +64,7 @@ PhotoGate's own folder, waiting while the camera is still writing).
 
 ## Notes
 
-- The signing key is committed on purpose so updates install over each other. This is a personal sideload app;
-  do not publish it to the Play Store with this key.
-- An earlier test version moved waiting photos into a hidden `DCIM/PhotoGate/.staging` folder. This version puts
-  them back into their original folders the first time it opens, then removes that folder.
+- `app/photogate.jks` (committed, public password) is only for sideload builds. Play releases use your private
+  upload key (docs/PLAY_STORE.md).
 - The Google Photos API upload version (with sign-in) is in git history at commit c77f25c.
 - Not included from Snapgate: Storage saver (16 MP recompress), context rules, burst review.

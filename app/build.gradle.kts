@@ -1,29 +1,51 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("app.cash.paparazzi") version "1.3.5"
+    id("app.cash.paparazzi") version "2.0.0-alpha05.1"
 }
 
 android {
     namespace = "com.raman.photogate"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.raman.photogate"
         minSdk = 30
-        targetSdk = 35
-        versionCode = 1
+        targetSdk = 36 // Google Play requires the latest Android version for new apps
+        versionCode = 2
         versionName = "1.0"
     }
 
-    // Fixed key so the SHA-1 never changes (needed for the Google OAuth client).
+    // Two keys:
+    //  - "fixed" (photogate.jks, committed, public password): sideload builds only, so they install over each other.
+    //  - "upload": your private Google Play upload key, from keystore.properties (never committed) or the
+    //    PG_UPLOAD_* environment variables (CI secrets). Release builds use it when it is configured.
+    val upload = Properties().apply {
+        rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+        System.getenv("PG_UPLOAD_STORE_FILE")?.let { put("storeFile", it) }
+        System.getenv("PG_UPLOAD_STORE_PASSWORD")?.let { put("storePassword", it) }
+        System.getenv("PG_UPLOAD_KEY_ALIAS")?.let { put("keyAlias", it) }
+        System.getenv("PG_UPLOAD_KEY_PASSWORD")?.let { put("keyPassword", it) }
+    }
+    val hasUploadKey = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { upload.getProperty(it) != null }
+
     signingConfigs {
         create("fixed") {
             storeFile = file("photogate.jks")
             storePassword = "photogate"
             keyAlias = "photogate"
             keyPassword = "photogate"
+        }
+        if (hasUploadKey) {
+            create("upload") {
+                storeFile = rootProject.file(upload.getProperty("storeFile"))
+                storePassword = upload.getProperty("storePassword")
+                keyAlias = upload.getProperty("keyAlias")
+                keyPassword = upload.getProperty("keyPassword")
+            }
         }
     }
 
@@ -32,17 +54,17 @@ android {
             signingConfig = signingConfigs.getByName("fixed")
         }
         release {
-            signingConfig = signingConfigs.getByName("fixed")
-            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName(if (hasUploadKey) "upload" else "fixed")
+            // R8: smaller download (about 3 MB instead of 19 MB)
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
@@ -65,4 +87,10 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }

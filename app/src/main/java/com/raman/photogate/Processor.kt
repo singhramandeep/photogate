@@ -51,7 +51,7 @@ object Processor {
     fun scan(c: Context, why: String = "scan", perPhotoNotify: Boolean = true): Result {
         val app = c.applicationContext
         if (!Media.hasPermission(app)) {
-            Store.log(app, "$why: no All files access, nothing checked")
+            Store.log(app, "$why: no photo access, nothing checked")
             return NOTHING
         }
 

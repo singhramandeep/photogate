@@ -1,48 +1,96 @@
 package com.raman.photogate
 
+import android.Manifest
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.media.MediaScannerConnection
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.io.File
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * What PhotoGate does with files. While waiting, a photo stays in its original folder.
- * Upload moves it into DCIM/PhotoGate/p<category> (synced by the gallery), Bin deletes it after the Bin timer,
- * Delete now deletes it at once.
+ * What PhotoGate does with photos, through Android's MediaStore (no "All files access").
+ * While waiting, a photo stays in its original folder. Upload moves it into DCIM/PhotoGate/p<category> (synced by the
+ * gallery), Bin deletes it after the Bin timer, Delete now deletes it at once.
+ *
+ * Changing another app's photo needs the user's OK: [Edits] asks Android for it (MediaStore.createWriteRequest /
+ * createDeleteRequest). With "Media management" (Android 12+) Android says yes without showing anything.
+ * The functions here do the bookkeeping once that OK is in.
  */
 object Gallery {
-    /** RELATIVE_PATH of the approved folder. Sync only this folder to Google Photos (Samsung Gallery). */
+    /** RELATIVE_PATH of the uploaded folder. Sync only its subfolders to Google Photos (Samsung Gallery). */
     const val FOLDER = "DCIM/PhotoGate/"
 
     private val sdcard: File get() = Environment.getExternalStorageDirectory()
 
-    fun gate(): Gate = Gate(File(sdcard, FOLDER.trimEnd('/')))
+    /** RELATIVE_PATH an uploaded photo of [category] goes to, e.g. "DCIM/PhotoGate/pCamera/". */
+    fun targetFolder(category: String): String =
+        FOLDER + (Categories.folderName(category)?.let { "$it/" } ?: "")
 
-    /** Deleting other apps' photos without a prompt each time needs "All files access" (one switch in settings). */
-    fun hasAccess(): Boolean = previewAccess ?: runCatching { Environment.isExternalStorageManager() }.getOrDefault(false)
+    // ------------------------------------------------------------------ permissions
 
     /** Set only by screenshot tests, where the system cannot be asked. */
     var previewAccess: Boolean? = null
 
-    fun accessIntent(c: Context): Intent =
-        Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${c.packageName}"))
+    /** Photos and videos permission (full access, not "selected photos only"). */
+    fun hasAccess(c: Context): Boolean = previewAccess ?: Media.hasPermission(c)
 
-    /** Tell MediaStore (and so Google Photos and galleries) that these paths changed. */
-    private fun rescan(c: Context, vararg paths: String) {
-        MediaScannerConnection.scanFile(c.applicationContext, arrayOf(*paths), null, null)
+    /** Android 14+: the user allowed only some photos. PhotoGate cannot see new ones then. */
+    fun partialAccess(c: Context): Boolean =
+        Build.VERSION.SDK_INT >= 34 && !Media.hasPermission(c) &&
+            ContextCompat.checkSelfPermission(c, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** "Media management" (Android 12+): move and delete without a confirmation each time. */
+    fun canManageMedia(c: Context): Boolean =
+        Build.VERSION.SDK_INT >= 31 && runCatching { MediaStore.canManageMedia(c) }.getOrDefault(false)
+
+    fun manageMediaIntent(c: Context): Intent? =
+        if (Build.VERSION.SDK_INT >= 31) Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA, Uri.parse("package:${c.packageName}"))
+        else null
+
+    // ------------------------------------------------------------------ MediaStore helpers
+
+    fun uriOf(id: Long, isVideo: Boolean): Uri = ContentUris.withAppendedId(
+        if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id,
+    )
+
+    /** The MediaStore uri of a tracked photo (old records without a real id are looked up by path). */
+    fun uriOf(c: Context, p: Photo): Uri? =
+        if (p.id >= 0) uriOf(p.id, p.isVideo) else Media.byPath(c, p.path)?.let { uriOf(it.id, it.isVideo) }
+
+    /**
+     * Moves a photo to another folder by changing its RELATIVE_PATH (MediaStore moves the file and keeps its id).
+     * Needs write access to [uri]. Returns the new path, or null if it did not work.
+     */
+    private fun move(c: Context, uri: Uri, relPath: String, name: String): String? {
+        val dir = File(sdcard, relPath.trimEnd('/'))
+        val finalName = Gate.unique(dir, name).name // never overwrite
+        val v = ContentValues().apply {
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+            if (finalName != name) put(MediaStore.MediaColumns.DISPLAY_NAME, finalName)
+        }
+        return try {
+            if (c.contentResolver.update(uri, v, null, null) > 0) File(dir, finalName).path else null
+        } catch (e: Exception) {
+            Store.log(c, "$name: could not move: $e")
+            null
+        }
     }
+
+    // ------------------------------------------------------------------ tracking
 
     /** Starts tracking a new photo. Nothing happens to the file. */
     fun track(c: Context, item: Item): Photo? {
@@ -51,103 +99,85 @@ object Gallery {
             .also { Store.addStaged(c, it) }
     }
 
-    fun approve(c: Context, id: Long): Boolean {
+    /** Uris that Upload / Delete now of these Inbox or Bin photos will change. */
+    fun stagedUris(c: Context, ids: Collection<Long>): List<Uri> =
+        ids.mapNotNull { id -> Store.stagedById(c, id)?.let { uriOf(c, it) } }
+
+    /** Uris that Undo upload / Delete of these uploaded photos will change. */
+    fun uploadedUris(c: Context, ids: Collection<Long>): List<Uri> =
+        ids.mapNotNull { id -> Store.approvedById(c, id)?.let { uriOf(c, it) } }
+
+    // ------------------------------------------------------------------ actions (after Android's OK)
+
+    /** Upload: move into PhotoGate/p<category> and write the category into the description. Needs write access. */
+    fun upload(c: Context, id: Long): Boolean {
         val p = Store.stagedById(c, id) ?: return false
         Notifier.cancel(c, id)
-        return try {
-            val cat = Store.categoryOf(c, p.from)
-            val dst = gate().approve(File(p.path), cat)
-            Describe.write(dst, cat) // before the rescan, so MediaStore and sync see the final file
-            Store.removeStaged(c, id)
-            Store.addApproved(c, p.copy(path = dst.path, name = dst.name, seenAt = System.currentTimeMillis(),
-                deleteAt = 0L, category = cat))
-            rescan(c, p.path, dst.path) // gone from its old folder, new in PhotoGate
-            Store.countApproved(c)
-            true
-        } catch (e: IOException) {
-            if (!File(p.path).exists()) Store.removeStaged(c, id) // original is gone, forget it
-            false
-        }
+        val uri = uriOf(c, p) ?: run { Store.removeStaged(c, id); return false }
+        val cat = Store.categoryOf(c, p.from)
+        val path = move(c, uri, targetFolder(cat), p.name) ?: return false
+        Describe.write(c, uri, File(path), cat)
+        Store.removeStaged(c, id)
+        Store.addApproved(
+            c, p.copy(path = path, name = File(path).name, seenAt = System.currentTimeMillis(), deleteAt = 0L, category = cat),
+        )
+        Store.countApproved(c)
+        Store.log(c, "${p.name}: uploaded to ${targetFolder(cat)}")
+        return true
     }
 
-    /** The original is deleted when the delay set in Settings is over (0 = right away). */
-    fun discard(c: Context, id: Long) {
-        val p = Store.stagedById(c, id) ?: return
+    /** Undo upload: back to its original folder and into the Inbox. Needs write access. */
+    fun undoUpload(c: Context, id: Long): Boolean {
+        val a = Store.approvedById(c, id) ?: return false
+        val uri = uriOf(c, a) ?: run { Store.removeApproved(c, id); return false }
+        val path = move(c, uri, a.from, a.name) ?: return false
+        Store.removeApproved(c, id)
+        val realId = if (a.id >= 0) a.id else ContentUris.parseId(uri)
+        Store.addStaged(c, Photo(realId, path, File(path).name, a.from, a.isVideo, System.currentTimeMillis()))
+        Store.log(c, "${a.name}: upload undone, back in ${a.from} and the Inbox")
+        return true
+    }
+
+    /** Bin: wait for the Bin timer. Returns true if the timer is "Immediately", so the caller deletes right away. */
+    fun bin(c: Context, id: Long): Boolean {
+        val p = Store.stagedById(c, id) ?: return false
         Notifier.cancel(c, id)
         val delayMs = Store.deleteAfterMin(c) * 60_000L
-        if (delayMs <= 0) {
-            deleteNow(c, id)
-            return
-        }
+        if (delayMs <= 0) return true
         Store.updateStaged(c, p.copy(deleteAt = System.currentTimeMillis() + delayMs))
         scheduleSweep(c)
+        return false
     }
 
-    /** Undo an approval: the photo goes back to its original folder and into the Inbox. */
-    fun undoApprove(c: Context, id: Long): Boolean {
-        val a = Store.approvedById(c, id) ?: return false
-        val f = File(a.path)
-        if (!f.exists()) {
-            Store.removeApproved(c, id)
-            return false
-        }
-        return try {
-            val folder = File(sdcard, a.from.trimEnd('/'))
-            val back = Gate.move(f, Gate.unique(folder, a.name))
-            Store.removeApproved(c, id)
-            Store.addStaged(c, Photo(a.id, back.path, back.name, a.from, a.isVideo, System.currentTimeMillis()))
-            rescan(c, f.path, back.path)
-            Store.log(c, "${a.name}: upload undone, back in ${a.from} and the Inbox")
-            true
-        } catch (e: IOException) {
-            Store.log(c, "${a.name}: could not undo upload: ${e.message}")
-            false
-        }
-    }
-
-    /** Deletes an approved photo from PhotoGate (and so from the phone). */
-    fun deleteApproved(c: Context, id: Long) {
-        val a = Store.approvedById(c, id) ?: return
-        val f = File(a.path)
-        if (gate().delete(f)) {
-            rescan(c, f.path)
-            Store.removeApproved(c, id)
-            Store.countDeleted(c)
-        }
-    }
-
-    /** Takes a discarded photo back to the Inbox. */
-    fun undiscard(c: Context, id: Long) {
+    /** Back to the Inbox from the Bin. */
+    fun toInbox(c: Context, id: Long) {
         val p = Store.stagedById(c, id) ?: return
         Store.updateStaged(c, p.copy(deleteAt = 0L))
         scheduleSweep(c)
     }
 
-    /** Deletes the original from its folder. */
-    fun deleteNow(c: Context, id: Long) {
-        val p = Store.stagedById(c, id) ?: return
-        Notifier.cancel(c, id)
-        val f = File(p.path)
-        val base = if (p.isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        // through MediaStore so galleries update at once; plain file delete as a fallback
-        runCatching { c.contentResolver.delete(ContentUris.withAppendedId(base, p.id), null, null) }
-        if (gate().delete(f)) {
-            rescan(c, f.path)
+    /** Bookkeeping after Android deleted these photos (createDeleteRequest deletes them itself). */
+    fun deleted(c: Context, ids: Collection<Long>) {
+        ids.forEach { id ->
+            Notifier.cancel(c, id)
+            val name = Store.stagedById(c, id)?.name ?: Store.approvedById(c, id)?.name
             Store.removeStaged(c, id)
+            Store.removeApproved(c, id)
             Store.countDeleted(c)
+            if (name != null) Store.log(c, "$name: deleted")
         }
     }
 
-    /** Deletes discarded photos whose time is up and schedules the next run. */
+    // ------------------------------------------------------------------ Bin timer
+
+    /** Bin photos whose timer ran out (deleted the next time PhotoGate is open, or from the notification). */
+    fun dueIds(c: Context): List<Long> = Gate.due(Store.staged(c), System.currentTimeMillis()).map { it.id }
+
+    /** Forget photos whose file vanished (deleted or moved by hand), list old uploads once, plan the next timer. */
     @Synchronized
-    fun sweep(c: Context) {
-        restoreOldStaging(c)
-        prefixOldFolders(c)
-        importExistingApproved(c)
-        val list = Store.staged(c)
-        Gate.due(list, System.currentTimeMillis()).forEach { deleteNow(c, it.id) }
-        // forget photos whose file vanished (deleted or moved by hand)
-        list.filter { !File(it.path).exists() }.forEach { Store.removeStaged(c, it.id) }
+    fun tidy(c: Context) {
+        importExistingUploads(c)
+        Store.staged(c).filter { !File(it.path).exists() }.forEach { Store.removeStaged(c, it.id) }
         Store.approved(c).filter { !File(it.path).exists() }.forEach { Store.removeApproved(c, it.id) }
         scheduleSweep(c)
     }
@@ -159,78 +189,33 @@ object Gallery {
         WorkManager.getInstance(c.applicationContext).enqueueUniqueWork("sweep", ExistingWorkPolicy.REPLACE, req)
     }
 
-    /** Once: Camera -> pCamera etc. for folders made before the prefix, keeping the Uploaded list in step. */
-    private fun prefixOldFolders(c: Context) {
-        if (Store.flag(c, "prefixedFolders")) return
-        val moved = gate().prefixOldFolders()
-        if (moved.isNotEmpty()) {
-            Store.approved(c).forEach { a ->
-                moved[a.path]?.let { Store.addApproved(c, a.copy(path = it, name = File(it).name)) }
-            }
-            moved.entries.chunked(200).forEach { batch ->
-                rescan(c, *(batch.map { it.key } + batch.map { it.value }).toTypedArray())
-            }
-            Store.log(c, "Renamed PhotoGate folders with a \"p\" prefix (${moved.size} files moved)")
-        }
-        Store.setFlag(c, "prefixedFolders")
-    }
-
     /**
-     * Photos approved before the Approved tab existed have no record. Once, list what is already in DCIM/PhotoGate
-     * so it shows up there. Their original folder is unknown, so Undo sends them to a folder of the same category.
+     * Photos uploaded before the Uploaded tab existed have no record. Once, list what MediaStore has under
+     * DCIM/PhotoGate so they show up there.
      */
-    private fun importExistingApproved(c: Context) {
-        if (Store.flag(c, "importedApproved")) return
-        val root = gate().root
+    private fun importExistingUploads(c: Context) {
+        if (Store.flag(c, "importedApproved") || !hasAccess(c)) return
         val known = Store.approved(c).map { it.path }.toSet()
-        val media = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "mp4", "3gp", "mkv", "webm", "mov", "dng")
-        val found = root.walkTopDown()
-            .onEnter { it == root || !it.name.startsWith(".") }
-            .filter { it.isFile && it.extension.lowercase() in media && it.path !in known }
-            .sortedBy { it.lastModified() }
-            .toList()
         val folders = Store.folders(c)
-        found.forEach { f ->
-            val cat = if (f.parentFile == root) "" else Categories.fromFolder(f.parentFile!!.name)
+        val found = Media.under(c, FOLDER).filter { it.file != null && it.file.path !in known }
+        found.forEach { item ->
+            val sub = item.folder.removePrefix(FOLDER).trimEnd('/')
+            val cat = if (sub.isEmpty()) "" else Categories.fromFolder(sub)
             val from = folders.firstOrNull { Store.categoryOf(c, it) == cat } ?: "DCIM/Camera/"
-            val video = f.extension.lowercase() in setOf("mp4", "3gp", "mkv", "webm", "mov")
-            Store.addApproved(c, Photo(-(f.path.hashCode().toLong() and 0x7fffffffL) - 1, f.path, f.name, from, video,
-                f.lastModified(), category = cat))
+            Store.addApproved(c, Photo(item.id, item.file!!.path, item.name, from, item.isVideo, item.addedMs, category = cat))
         }
-        if (found.isNotEmpty()) Store.log(c, "Listed ${found.size} photos already in PhotoGate under Approved")
+        if (found.isNotEmpty()) Store.log(c, "Listed ${found.size} photos already in PhotoGate under Uploaded")
         Store.setFlag(c, "importedApproved")
-    }
-
-    /**
-     * The previous version moved waiting photos into DCIM/PhotoGate/.staging. Put each one back into the folder it
-     * came from, keep its state (waiting or discarded), and remove the hidden folder once it is empty.
-     */
-    private fun restoreOldStaging(c: Context) {
-        val staging = gate().oldStaging
-        if (!staging.isDirectory) return
-        val known = Store.staged(c).associateBy { it.path }
-        staging.listFiles()?.filter { it.isFile && it.name != ".nomedia" }?.forEach { f ->
-            val p = known[f.path]
-            val folder = File(sdcard, (p?.from ?: "DCIM/Camera/").trimEnd('/'))
-            try {
-                val back = Gate.move(f, Gate.unique(folder, p?.name ?: f.name))
-                rescan(c, back.path)
-                if (p != null) Store.updateStaged(c, p.copy(path = back.path, name = back.name))
-            } catch (e: IOException) {
-                // leave it; tried again on the next sweep
-            }
-        }
-        val left = staging.listFiles()?.filter { it.name != ".nomedia" }.orEmpty()
-        if (left.isEmpty()) {
-            File(staging, ".nomedia").delete()
-            staging.delete()
-        }
     }
 }
 
+/** When a Bin timer runs out: Android only lets PhotoGate delete while it is on screen, so say it's time. */
 class SweepWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
-        Gallery.sweep(applicationContext)
+        val c = applicationContext
+        Gallery.tidy(c)
+        val due = Gallery.dueIds(c)
+        if (due.isNotEmpty()) Notifier.postDue(c, due.size)
         return Result.success()
     }
 }

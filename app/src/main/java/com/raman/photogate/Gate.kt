@@ -49,10 +49,11 @@ class Gate(val root: File) {
         if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create $root")
     }
 
-    /** Moves an approved photo out of its folder into PhotoGate. */
-    fun approve(src: File): File {
-        ensureDirs()
-        return move(src, unique(root, src.name))
+    /** Moves an approved photo out of its folder into PhotoGate/<category>. */
+    fun approve(src: File, category: String? = null): File {
+        val dir = category?.let { Categories.clean(it) }?.let { File(root, it) } ?: root
+        if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Cannot create $dir")
+        return move(src, unique(dir, src.name))
     }
 
     /** Deletes a file. True if it is gone (also when it was already gone). */

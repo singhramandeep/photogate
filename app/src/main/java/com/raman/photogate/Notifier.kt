@@ -61,7 +61,7 @@ object Notifier {
         val b = NotificationCompat.Builder(c, CH_ASK)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("Send this $kind to PhotoGate?")
-            .setContentText("In ${Media.label(item.from)}")
+            .setContentText("${Media.label(item.from)} · Approve moves it to PhotoGate/${Store.categoryOf(c, item.from)}")
             .setGroup(GROUP)
             .setAutoCancel(true)
             .setSilent(true)

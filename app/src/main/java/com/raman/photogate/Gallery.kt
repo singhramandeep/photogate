@@ -30,7 +30,10 @@ object Gallery {
     fun gate(): Gate = Gate(File(sdcard, FOLDER.trimEnd('/')))
 
     /** Deleting other apps' photos without a prompt each time needs "All files access" (one switch in settings). */
-    fun hasAccess(): Boolean = Environment.isExternalStorageManager()
+    fun hasAccess(): Boolean = previewAccess ?: runCatching { Environment.isExternalStorageManager() }.getOrDefault(false)
+
+    /** Set only by screenshot tests, where the system cannot be asked. */
+    var previewAccess: Boolean? = null
 
     fun accessIntent(c: Context): Intent =
         Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${c.packageName}"))
@@ -51,7 +54,7 @@ object Gallery {
     fun approveDirect(c: Context, item: Item): Boolean {
         val src = item.file ?: return false
         return try {
-            val dst = gate().approve(src)
+            val dst = gate().approve(src, Store.categoryOf(c, item.folder))
             rescan(c, src.path, dst.path)
             Store.countApproved(c)
             true
@@ -64,7 +67,7 @@ object Gallery {
         val p = Store.stagedById(c, id) ?: return false
         Notifier.cancel(c, id)
         return try {
-            val dst = gate().approve(File(p.path))
+            val dst = gate().approve(File(p.path), Store.categoryOf(c, p.from))
             Store.removeStaged(c, id)
             rescan(c, p.path, dst.path) // gone from its old folder, new in PhotoGate
             Store.countApproved(c)
@@ -85,6 +88,13 @@ object Gallery {
             return
         }
         Store.updateStaged(c, p.copy(deleteAt = System.currentTimeMillis() + delayMs))
+        scheduleSweep(c)
+    }
+
+    /** Takes a discarded photo back to the Inbox. */
+    fun undiscard(c: Context, id: Long) {
+        val p = Store.stagedById(c, id) ?: return
+        Store.updateStaged(c, p.copy(deleteAt = 0L))
         scheduleSweep(c)
     }
 

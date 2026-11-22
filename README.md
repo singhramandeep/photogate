@@ -8,12 +8,15 @@ Selective photo backup for Android 11+, without any Google login or Google Cloud
 
 How it works:
 
-- When a new photo or video lands in a folder you chose (Camera, Screenshots, ...), it stays right there and a quiet
-  notification (and the Pending tab) offers **Approve**, **Discard** or **Delete now**.
-- **Approve** moves it into `DCIM/PhotoGate/`, a normal device folder. Sync only that folder to Google Photos (see
-  First run), and only approved photos reach the cloud.
+- **Sources:** choose which folders to watch and give each a **category** (Camera, Screenshots, Social, Downloads,
+  Other, or your own). PhotoGate guesses one from the folder name.
+- When a new photo or video lands in a watched folder, it stays right there and shows up in the **Inbox** (and as a
+  quiet notification) with **Approve**, **Discard** or **Delete now**. Tap a photo to review them one by one.
+- **Approve** moves it into `DCIM/PhotoGate/<category>/`, e.g. `DCIM/PhotoGate/Screenshots/`. Sync only those
+  folders to Google Photos (see First run), and only approved photos reach the cloud.
 - **Discard** deletes the original after a delay (Immediately / 1 h / 4 h / 8 h / 24 h, set in Settings). Until then
-  it is listed under Discarded, where you can still Approve or Delete now.
+  it sits in the **Bin** with a ⏱ tag showing how long it has left; you can still Approve it, send it back to the
+  Inbox, or Delete now.
 - **Delete now** deletes the original at once.
 
 Also: Folders tab, temporary modes (leave everything alone / approve everything, with auto-expiry), decision window.
@@ -33,14 +36,19 @@ APK: `app/build/outputs/apk/release/app-release.apk`.
    PhotoGate, then go back. (Android needs this so the app can move and delete photos that the camera app
    created without asking you to confirm each one.)
 2. Settings > Notifications: **Allow** (Android 13+).
-3. Folders tab: switch on the folders you want caught. Camera is on by default.
+3. Sources tab: switch on the folders you want caught (Camera is on by default) and check each one's category.
 4. Settings > switch on **Watch for new photos**.
 5. Approve one photo so `DCIM/PhotoGate` exists. Then:
    - Google Photos app > Settings > Backup: turn **off** (it always includes Camera, so it can't be used).
-   - Samsung Gallery > Settings > **Sync with Google Photos** (Cloud sync): choose albums to sync, switch on
-     **PhotoGate** only, Camera and everything else off.
+   - Samsung Gallery > Settings > **Sync with Google Photos** (Cloud sync): choose albums to sync, switch on only the
+     PhotoGate category folders, Camera and everything else off. Careful: `DCIM/PhotoGate/Camera` shows up as an
+     album named "Camera", just like your real Camera folder. Pick the one inside PhotoGate (or name the category
+     something else, e.g. "Camera approved").
 
 ## Tests
+
+Screenshots of every screen are rendered without a phone by Paparazzi: `gradle :app:recordPaparazziDebug`, images in
+`app/src/test/snapshots/images/`.
 
 `gradle :app:testDebugUnitTest` runs the unit tests: real files in a temporary folder (approve moves the photo into
 PhotoGate, no hidden folder, name clashes never overwrite, file date kept, delete, putting back photos staged by the

@@ -110,12 +110,20 @@ object Media {
         return counts.entries.map { it.key to it.value }.sortedByDescending { it.second }
     }
 
-    /** Thumbnail straight from the file. */
-    fun thumb(f: File, isVideo: Boolean, px: Int = 400): Bitmap? = try {
-        if (isVideo) ThumbnailUtils.createVideoThumbnail(f, Size(px, px), null)
-        else ThumbnailUtils.createImageThumbnail(f, Size(px, px), null)
-    } catch (e: Exception) {
-        null
+    private val thumbs = object : android.util.LruCache<String, Bitmap>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+
+    /** Thumbnail straight from the file (cached, so switching tabs does not reload everything). */
+    fun thumb(f: File, isVideo: Boolean, px: Int = 400): Bitmap? {
+        val key = "${f.path}@$px"
+        thumbs.get(key)?.let { return it }
+        return try {
+            (if (isVideo) ThumbnailUtils.createVideoThumbnail(f, Size(px, px), null)
+            else ThumbnailUtils.createImageThumbnail(f, Size(px, px), null)).also { thumbs.put(key, it) }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     fun label(path: String): String =

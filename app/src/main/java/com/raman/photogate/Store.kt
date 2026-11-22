@@ -26,6 +26,29 @@ object Store {
         bump()
     }
 
+    // ---- category of each tracked folder (falls back to a guess from the folder name) ----
+    fun categoryOf(c: Context, folder: String): String =
+        p(c).getString("cat:$folder", null) ?: Categories.guess(folder)
+
+    fun setCategory(c: Context, folder: String, category: String) {
+        val clean = Categories.clean(category) ?: return
+        p(c).edit().putString("cat:$folder", clean).apply()
+        if (clean !in Categories.PRESETS) addCategory(c, clean)
+        bump()
+    }
+
+    /** Preset categories plus any the user made. */
+    fun categories(c: Context): List<String> =
+        Categories.PRESETS + (p(c).getStringSet("customCats", emptySet()) ?: emptySet())
+            .filter { it !in Categories.PRESETS }.sorted()
+
+    fun addCategory(c: Context, name: String) {
+        val clean = Categories.clean(name) ?: return
+        val s = (p(c).getStringSet("customCats", emptySet()) ?: emptySet()) + clean
+        p(c).edit().putStringSet("customCats", s).apply()
+        bump()
+    }
+
     // ---- media id that was newest when the app first ran; nothing at or below it is ever touched ----
     fun lastSeen(c: Context): Long = p(c).getLong("lastSeen", -1L)
     fun setLastSeen(c: Context, id: Long) {

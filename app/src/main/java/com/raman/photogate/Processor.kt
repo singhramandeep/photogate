@@ -10,7 +10,8 @@ object Processor {
     /** A file must be this long untouched before it is handled, so the camera has finished writing it. */
     const val SETTLE_MS = 3_000L
 
-    enum class Action { SKIP, WAIT, ASK, APPROVE }
+    /** ASK = Inbox + notification, ASK_QUIET = Inbox only. Every photo in a watched folder ends up somewhere. */
+    enum class Action { SKIP, WAIT, ASK, ASK_QUIET, APPROVE }
 
     /** Pure decision for one new item (unit tested). */
     fun decide(
@@ -20,24 +21,23 @@ object Processor {
         // PhotoGate's own folder (the approved copies) is never asked about
         if (folder.startsWith(Gallery.FOLDER, ignoreCase = true)) return Action.SKIP
         if (folder !in folders) return Action.SKIP
-        val taken = maxOf(addedMs, modifiedMs)
-        if (windowMs > 0 && nowMs - taken > windowMs) return Action.SKIP
-        if (mode == "none") return Action.SKIP // never asked, nothing happens
         if (nowMs - modifiedMs < SETTLE_MS) return Action.WAIT
-        return if (mode == "all") Action.APPROVE else Action.ASK
+        if (mode == "all") return Action.APPROVE
+        val taken = maxOf(addedMs, modifiedMs)
+        // quiet mode, or a photo noticed late (outside the decision window): Inbox without a notification
+        if (mode == "none" || (windowMs > 0 && nowMs - taken > windowMs)) return Action.ASK_QUIET
+        return Action.ASK
     }
 
     /** What the "handled" memory should hold after a scan: old entries dropped so it stays small. */
     fun pruneHandled(handled: Map<Long, Long>, nowSec: Long): Map<Long, Long> =
         handled.filterValues { it >= nowSec - 2 * LOOKBACK_SEC }
 
-    /** Why an item was skipped, for the activity log. */
-    fun skipReason(folder: String, folders: Set<String>, mode: String, windowMs: Long, taken: Long, nowMs: Long): String =
+    /** Why an item was left alone, for the activity log. */
+    fun skipReason(folder: String, folders: Set<String>): String =
         when {
             folder.startsWith(Gallery.FOLDER, ignoreCase = true) -> "PhotoGate's own folder"
             folder !in folders -> "folder $folder is not switched on in Sources"
-            windowMs > 0 && nowMs - taken > windowMs -> "older than the decision window"
-            mode == "none" -> "\"Don't ask\" mode is on"
             else -> "skipped"
         }
 
@@ -90,22 +90,36 @@ object Processor {
                 continue
             }
             val label = "${item.name} (${item.folder})"
-            when (decide(item.folder, item.addedMs, item.modifiedMs, folders, mode, windowMs, nowMs)) {
+            val action = decide(item.folder, item.addedMs, item.modifiedMs, folders, mode, windowMs, nowMs)
+            when (action) {
                 Action.WAIT -> {
                     again = true
                     Store.log(app, "$label: still being written, checking again shortly")
                     continue // not marked handled: looked at again next scan
                 }
-                Action.SKIP -> Store.log(app, "$label: left alone, " +
-                    skipReason(item.folder, folders, mode, windowMs, maxOf(item.addedMs, item.modifiedMs), nowMs))
-                Action.APPROVE -> Store.log(app, "$label: auto-approved " +
-                    if (Gallery.approveDirect(app, item)) "OK" else "FAILED (could not move)")
-                Action.ASK -> {
+                Action.SKIP -> {
+                    // our own folder is noisy (every approval lands there): not logged
+                    if (!item.folder.startsWith(Gallery.FOLDER, ignoreCase = true)) {
+                        Store.log(app, "$label: left alone, " + skipReason(item.folder, folders))
+                    }
+                }
+                Action.APPROVE -> {
+                    val ok = Gallery.approveDirect(app, item)
+                    if (ok) Store.log(app, "$label: auto-approved (Auto-approve mode is on), see Approved tab")
+                    else {
+                        // could not move it: keep it visible in the Inbox instead of losing track of it
+                        Gallery.track(app, item)
+                        Store.log(app, "$label: auto-approve FAILED (could not move), put in Inbox")
+                    }
+                }
+                Action.ASK, Action.ASK_QUIET -> {
                     val p = Gallery.track(app, item)
                     if (p == null) Store.log(app, "$label: could not read its file path")
-                    else {
+                    else if (action == Action.ASK) {
                         Notifier.postAsk(app, p)
                         Store.log(app, "$label: added to Inbox")
+                    } else {
+                        Store.log(app, "$label: added to Inbox quietly (no notification)")
                     }
                 }
             }

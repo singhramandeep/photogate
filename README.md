@@ -20,7 +20,11 @@ How it works:
   Inbox, or Delete now.
 - **Delete now** deletes the original at once.
 
-Also: Folders tab, temporary modes (leave everything alone / approve everything, with auto-expiry), decision window.
+Every photo from a watched folder always shows up in one of three tabs: **Inbox** (waiting), **Approved** (moved to
+PhotoGate; Undo puts it back) or **Bin** (discarded, with its countdown).
+
+Also: quick modes with auto-expiry (Auto-approve everything / Quiet mode = Inbox without notifications; a banner on
+the Inbox shows when one is on), a notification window, and an Activity log with Scan now in Settings.
 
 ## 1. Build the APK
 

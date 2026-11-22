@@ -18,7 +18,7 @@ class ProcessorTest {
 
     @Test fun asksAboutNewPhotoInWatchedFolder() = assertEquals(Action.ASK, decide(item()))
     @Test fun skipsOtherFolders() = assertEquals(Action.SKIP, decide(item(folder = "Pictures/Screenshots/")))
-    @Test fun noneModeDoesNothing() = assertEquals(Action.SKIP, decide(item(), mode = "none"))
+    @Test fun quietModeStillLandsInInbox() = assertEquals(Action.ASK_QUIET, decide(item(), mode = "none"))
     @Test fun allModeApprovesStraightAway() = assertEquals(Action.APPROVE, decide(item(), mode = "all"))
 
     @Test fun neverTouchesItsOwnFolder() {
@@ -31,8 +31,15 @@ class ProcessorTest {
     @Test fun waitsWhileCameraIsStillWriting() =
         assertEquals(Action.WAIT, decide(item(addedAgoMs = 1_000)))
 
-    @Test fun windowSkipsOldArrivals() =
-        assertEquals(Action.SKIP, decide(item(addedAgoMs = 10 * 60_000), windowMin = 5))
+    @Test fun lateArrivalsLandInInboxQuietly() =
+        assertEquals(Action.ASK_QUIET, decide(item(addedAgoMs = 10 * 60_000), windowMin = 5))
+
+    @Test fun everyFinishedPhotoInAWatchedFolderEndsUpSomewhere() {
+        for (mode in listOf("ask", "none", "all")) for (w in listOf(0, 1, 5, 60)) for (ago in listOf(4_000L, 3_600_000L, 86_000_000L)) {
+            val a = decide(item(addedAgoMs = ago), mode = mode, windowMin = w)
+            assert(a == Action.ASK || a == Action.ASK_QUIET || a == Action.APPROVE) { "$mode/$w/$ago -> $a" }
+        }
+    }
 
     @Test fun windowKeepsFreshArrivals() =
         assertEquals(Action.ASK, decide(item(addedAgoMs = 60_000), windowMin = 5))
@@ -41,12 +48,8 @@ class ProcessorTest {
         assertEquals(Action.ASK, decide(item(addedAgoMs = 20 * 60_000, modifiedAgoMs = 30_000), windowMin = 1))
 
     @Test fun skipReasonsAreSpecific() {
-        val t = now - 10_000
-        assertEquals("folder Pictures/X/ is not switched on in Sources",
-            Processor.skipReason("Pictures/X/", setOf(cam), "ask", 0, t, now))
-        assertEquals("older than the decision window",
-            Processor.skipReason(cam, setOf(cam), "ask", 1_000, t, now))
-        assertEquals("\"Don't ask\" mode is on", Processor.skipReason(cam, setOf(cam), "none", 0, t, now))
+        assertEquals("folder Pictures/X/ is not switched on in Sources", Processor.skipReason("Pictures/X/", setOf(cam)))
+        assertEquals("PhotoGate's own folder", Processor.skipReason(Gallery.FOLDER + "Camera/", setOf(cam)))
     }
 
     @Test fun pruneDropsOnlyEntriesOlderThanLookbackTwice() {

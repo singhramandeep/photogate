@@ -58,6 +58,10 @@ object Gallery {
             val dst = gate().approve(src, cat)
             Describe.write(dst, cat)
             rescan(c, src.path, dst.path)
+            Store.addApproved(
+                c, Photo(item.id, dst.path, dst.name, item.folder, item.isVideo, System.currentTimeMillis(),
+                    category = cat, auto = true),
+            )
             Store.countApproved(c)
             true
         } catch (e: IOException) {
@@ -73,6 +77,8 @@ object Gallery {
             val dst = gate().approve(File(p.path), cat)
             Describe.write(dst, cat) // before the rescan, so MediaStore and sync see the final file
             Store.removeStaged(c, id)
+            Store.addApproved(c, p.copy(path = dst.path, name = dst.name, seenAt = System.currentTimeMillis(),
+                deleteAt = 0L, category = cat))
             rescan(c, p.path, dst.path) // gone from its old folder, new in PhotoGate
             Store.countApproved(c)
             true
@@ -93,6 +99,39 @@ object Gallery {
         }
         Store.updateStaged(c, p.copy(deleteAt = System.currentTimeMillis() + delayMs))
         scheduleSweep(c)
+    }
+
+    /** Undo an approval: the photo goes back to its original folder and into the Inbox. */
+    fun undoApprove(c: Context, id: Long): Boolean {
+        val a = Store.approvedById(c, id) ?: return false
+        val f = File(a.path)
+        if (!f.exists()) {
+            Store.removeApproved(c, id)
+            return false
+        }
+        return try {
+            val folder = File(sdcard, a.from.trimEnd('/'))
+            val back = Gate.move(f, Gate.unique(folder, a.name))
+            Store.removeApproved(c, id)
+            Store.addStaged(c, Photo(a.id, back.path, back.name, a.from, a.isVideo, System.currentTimeMillis()))
+            rescan(c, f.path, back.path)
+            Store.log(c, "${a.name}: approval undone, back in ${a.from} and the Inbox")
+            true
+        } catch (e: IOException) {
+            Store.log(c, "${a.name}: could not undo approval: ${e.message}")
+            false
+        }
+    }
+
+    /** Deletes an approved photo from PhotoGate (and so from the phone). */
+    fun deleteApproved(c: Context, id: Long) {
+        val a = Store.approvedById(c, id) ?: return
+        val f = File(a.path)
+        if (gate().delete(f)) {
+            rescan(c, f.path)
+            Store.removeApproved(c, id)
+            Store.countDeleted(c)
+        }
     }
 
     /** Takes a discarded photo back to the Inbox. */
@@ -121,10 +160,12 @@ object Gallery {
     @Synchronized
     fun sweep(c: Context) {
         restoreOldStaging(c)
+        importExistingApproved(c)
         val list = Store.staged(c)
         Gate.due(list, System.currentTimeMillis()).forEach { deleteNow(c, it.id) }
-        // forget photos whose original vanished (deleted or moved by hand)
+        // forget photos whose file vanished (deleted or moved by hand)
         list.filter { !File(it.path).exists() }.forEach { Store.removeStaged(c, it.id) }
+        Store.approved(c).filter { !File(it.path).exists() }.forEach { Store.removeApproved(c, it.id) }
         scheduleSweep(c)
     }
 
@@ -133,6 +174,32 @@ object Gallery {
         val delay = (next - System.currentTimeMillis()).coerceAtLeast(0L)
         val req = OneTimeWorkRequestBuilder<SweepWorker>().setInitialDelay(delay, TimeUnit.MILLISECONDS).build()
         WorkManager.getInstance(c.applicationContext).enqueueUniqueWork("sweep", ExistingWorkPolicy.REPLACE, req)
+    }
+
+    /**
+     * Photos approved before the Approved tab existed have no record. Once, list what is already in DCIM/PhotoGate
+     * so it shows up there. Their original folder is unknown, so Undo sends them to a folder of the same category.
+     */
+    private fun importExistingApproved(c: Context) {
+        if (Store.flag(c, "importedApproved")) return
+        val root = gate().root
+        val known = Store.approved(c).map { it.path }.toSet()
+        val media = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "mp4", "3gp", "mkv", "webm", "mov", "dng")
+        val found = root.walkTopDown()
+            .onEnter { it == root || !it.name.startsWith(".") }
+            .filter { it.isFile && it.extension.lowercase() in media && it.path !in known }
+            .sortedBy { it.lastModified() }
+            .toList()
+        val folders = Store.folders(c)
+        found.forEach { f ->
+            val cat = if (f.parentFile == root) "" else f.parentFile!!.name
+            val from = folders.firstOrNull { Store.categoryOf(c, it) == cat } ?: "DCIM/Camera/"
+            val video = f.extension.lowercase() in setOf("mp4", "3gp", "mkv", "webm", "mov")
+            Store.addApproved(c, Photo(-(f.path.hashCode().toLong() and 0x7fffffffL) - 1, f.path, f.name, from, video,
+                f.lastModified(), category = cat))
+        }
+        if (found.isNotEmpty()) Store.log(c, "Listed ${found.size} photos already in PhotoGate under Approved")
+        Store.setFlag(c, "importedApproved")
     }
 
     /**

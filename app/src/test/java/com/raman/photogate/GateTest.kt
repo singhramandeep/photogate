@@ -106,8 +106,11 @@ class GateTest {
 
     @Test
     fun photoSurvivesJsonRoundTrip() {
-        val p = Photo(7, "/sd/DCIM/Camera/a.jpg", "a.jpg", "DCIM/Camera/", true, 123, 456)
+        val p = Photo(7, "/sd/DCIM/Camera/a.jpg", "a.jpg", "DCIM/Camera/", true, 123, 456, "Camera", auto = true)
         assertEquals(p, Photo.fromJson(p.toJson()))
+        // records saved by older versions (no category / auto) still load
+        val old = org.json.JSONObject("""{"id":1,"path":"/x","name":"x","from":"DCIM/Camera/","video":false,"at":5,"deleteAt":0}""")
+        assertEquals(Photo(1, "/x", "x", "DCIM/Camera/", false, 5), Photo.fromJson(old))
     }
 
     @Test

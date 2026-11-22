@@ -14,14 +14,17 @@ data class Photo(
     val name: String,
     val from: String, // RELATIVE_PATH of its folder, e.g. "DCIM/Camera/"
     val isVideo: Boolean,
-    val seenAt: Long,
+    val seenAt: Long, // when it was caught (for approved photos: when it was approved)
     val deleteAt: Long = 0L,
+    val category: String = "", // set once approved: the PhotoGate subfolder it went to
+    val auto: Boolean = false, // approved by "Auto-approve everything" mode, not by hand
 ) {
     val discarded: Boolean get() = deleteAt > 0
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("path", path).put("name", name).put("from", from)
         .put("video", isVideo).put("at", seenAt).put("deleteAt", deleteAt)
+        .put("cat", category).put("auto", auto)
 
     companion object {
         fun fromJson(j: JSONObject) = Photo(
@@ -32,6 +35,8 @@ data class Photo(
             isVideo = j.optBoolean("video"),
             seenAt = j.optLong("at"),
             deleteAt = j.optLong("deleteAt"),
+            category = j.optString("cat"),
+            auto = j.optBoolean("auto"),
         )
     }
 }

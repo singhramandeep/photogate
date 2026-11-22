@@ -45,7 +45,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -153,21 +153,26 @@ fun App(act: Actions) {
     val all = remember(tick) { Store.staged(c) }
     val inbox = all.count { !it.discarded }
     val bin = all.count { it.discarded }
+    val approved = remember(tick) { Store.approved(c).size }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.statusBarsPadding().navigationBarsPadding()) {
             Header()
-            PrimaryTabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
+            PrimaryScrollableTabRow(
+                selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background, edgePadding = 8.dp,
+            ) {
                 TabLabel("Inbox", inbox, tab == 0) { tab = 0 }
-                TabLabel("Bin", bin, tab == 1) { tab = 1 }
-                TabLabel("Sources", 0, tab == 2) { tab = 2 }
-                TabLabel("Settings", 0, tab == 3) { tab = 3 }
+                TabLabel("Approved", approved, tab == 1, quiet = true) { tab = 1 }
+                TabLabel("Bin", bin, tab == 2) { tab = 2 }
+                TabLabel("Sources", 0, tab == 3) { tab = 3 }
+                TabLabel("Settings", 0, tab == 4) { tab = 4 }
             }
             Box(Modifier.fillMaxSize()) {
                 when (tab) {
-                    0 -> InboxScreen { tab = 2 }
-                    1 -> BinScreen()
-                    2 -> SourcesScreen()
+                    0 -> InboxScreen({ tab = 3 }, { tab = 4 })
+                    1 -> ApprovedScreen()
+                    2 -> BinScreen()
+                    3 -> SourcesScreen()
                     else -> SettingsScreen(act)
                 }
             }
@@ -176,13 +181,16 @@ fun App(act: Actions) {
 }
 
 @Composable
-private fun TabLabel(text: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+private fun TabLabel(text: String, count: Int, selected: Boolean, quiet: Boolean = false, onClick: () -> Unit) {
     Tab(selected = selected, onClick = onClick, text = {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, maxLines = 1)
             if (count > 0) {
                 Spacer(Modifier.width(6.dp))
-                Badge(containerColor = MaterialTheme.colorScheme.primary) { Text("$count") }
+                Badge(
+                    containerColor = if (quiet) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
+                    contentColor = if (quiet) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimary,
+                ) { Text("$count") }
             }
         }
     })
@@ -224,7 +232,7 @@ private fun Header() {
         }
         if (mode != "ask") {
             Pill(
-                if (mode == "all") "Auto-approve on" else "Not asking",
+                if (mode == "all") "Auto-approve on" else "Quiet mode",
                 MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer,
             )
         }
@@ -283,7 +291,13 @@ private fun Thumb(p: Photo, px: Int, modifier: Modifier, scale: ContentScale = C
 private fun Tile(p: Photo, topTag: (@Composable () -> Unit)?, onClick: () -> Unit) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
-    val cat = remember(tick, p.from) { Store.categoryOf(c, p.from) }
+    val cat = remember(tick, p.from, p.category, p.path) {
+        when {
+            p.category.isNotEmpty() -> p.category
+            p.path.contains("/" + Gallery.FOLDER) -> "PhotoGate" // approved before categories existed
+            else -> Store.categoryOf(c, p.from)
+        }
+    }
     Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)) {
         Thumb(p, 400, Modifier.fillMaxSize())
         Box(
@@ -306,17 +320,20 @@ private fun Tile(p: Photo, topTag: (@Composable () -> Unit)?, onClick: () -> Uni
 // ================================================================ Inbox
 
 @Composable
-fun InboxScreen(goToSources: () -> Unit) {
+fun InboxScreen(goToSources: () -> Unit, goToSettings: () -> Unit = {}) {
     val c = LocalContext.current
     val tick = Store.tick.intValue
     val run = rememberRunner()
     val list = remember(tick) { Store.staged(c).filter { !it.discarded }.sortedByDescending { it.seenAt } }
     var reviewing by remember { mutableStateOf<Long?>(null) }
 
+    Column(Modifier.fillMaxSize()) {
+    ModeBanner(goToSettings)
     if (list.isEmpty()) {
         EmptyState(
             "All clear",
-            "New photos from your sources wait here for a decision. They stay in their folder until then.",
+            "New photos from your sources wait here for a decision. They stay in their folder until then. " +
+                "Approved ones are in the Approved tab, discarded ones in the Bin.",
             "Choose sources", goToSources,
         )
     } else {
@@ -333,9 +350,88 @@ fun InboxScreen(goToSources: () -> Unit) {
             }
         }) { p -> Tile(p, null) { reviewing = p.id } }
     }
+    }
 
     reviewing?.let { id ->
-        Review(list, id, binMode = false, onClose = { reviewing = null }, onMove = { reviewing = it })
+        Review(list, id, Kind.INBOX, onClose = { reviewing = null }, onMove = { reviewing = it })
+    }
+}
+
+/** Shown on top of the Inbox while a quick mode runs, so it is never a surprise. */
+@Composable
+private fun ModeBanner(goToSettings: () -> Unit) {
+    val c = LocalContext.current
+    val tick = Store.tick.intValue
+    val now = rememberNow()
+    val mode = remember(tick, now) { Store.mode(c) }
+    if (mode == "ask") return
+    val until = remember(tick, now) { Store.modeUntil(c) }
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).clickable(onClick = goToSettings)) {
+                Text(
+                    if (mode == "all") "Auto-approve is on" else "Quiet mode is on",
+                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Text(
+                    (if (mode == "all") "New photos go straight to Approved" else "New photos land here without notifications") +
+                        " until " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(until)),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            TextButton(onClick = { Store.stopMode(c) }) { Text("Stop") }
+        }
+    }
+}
+
+// ================================================================ Approved
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ApprovedScreen() {
+    val c = LocalContext.current
+    val tick = Store.tick.intValue
+    val all = remember(tick) { Store.approved(c).sortedByDescending { it.seenAt } }
+    var filter by remember { mutableStateOf<String?>(null) }
+    val cats = all.map { it.category.ifEmpty { "PhotoGate" } }.distinct().sorted()
+    val list = all.filter { filter == null || it.category.ifEmpty { "PhotoGate" } == filter }
+    var reviewing by remember { mutableStateOf<Long?>(null) }
+
+    if (all.isEmpty()) {
+        EmptyState(
+            "Nothing approved yet",
+            "Approved photos move to DCIM/PhotoGate/<category> and are listed here. Undo puts one back in the Inbox.",
+        )
+    } else {
+        PhotoGrid(list, header = {
+            Text(
+                "${all.size} approved · in DCIM/PhotoGate, synced by your gallery",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (cats.size > 1) {
+                Spacer(Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text("All") })
+                    cats.forEach { cat ->
+                        FilterChip(selected = filter == cat, onClick = { filter = cat }, label = { Text(cat) })
+                    }
+                }
+            }
+        }) { p ->
+            Tile(p, topTag = if (p.auto) ({
+                Pill("Auto", MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer)
+            }) else null) { reviewing = p.id }
+        }
+    }
+
+    reviewing?.let { id ->
+        Review(list, id, Kind.APPROVED, onClose = { reviewing = null }, onMove = { reviewing = it })
     }
 }
 
@@ -389,7 +485,7 @@ fun BinScreen() {
     }
 
     reviewing?.let { id ->
-        Review(list, id, binMode = true, onClose = { reviewing = null }, onMove = { reviewing = it })
+        Review(list, id, Kind.BIN, onClose = { reviewing = null }, onMove = { reviewing = it })
     }
 }
 
@@ -403,8 +499,11 @@ private fun CountdownTag(msLeft: Long, long: Boolean = false) {
 
 // ================================================================ full-screen review
 
+private enum class Kind { INBOX, APPROVED, BIN }
+
 @Composable
-private fun Review(list: List<Photo>, id: Long, binMode: Boolean, onClose: () -> Unit, onMove: (Long?) -> Unit) {
+private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit, onMove: (Long?) -> Unit) {
+    val binMode = kind == Kind.BIN
     val c = LocalContext.current
     val run = rememberRunner()
     val now = rememberNow()
@@ -416,7 +515,7 @@ private fun Review(list: List<Photo>, id: Long, binMode: Boolean, onClose: () ->
     }
     val p = list[index]
     val next = list.getOrNull(index + 1)?.id ?: list.getOrNull(index - 1)?.id
-    val cat = remember(p.from, Store.tick.intValue) { Store.categoryOf(c, p.from) }
+    val cat = remember(p.from, p.category, Store.tick.intValue) { p.category.ifEmpty { Store.categoryOf(c, p.from) } }
     fun act(block: () -> Unit) {
         onMove(next)
         run { block() }
@@ -450,11 +549,24 @@ private fun Review(list: List<Photo>, id: Long, binMode: Boolean, onClose: () ->
                 ) {
                     Text(p.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        "In ${p.from.trimEnd('/')} · Approve moves it to PhotoGate/$cat and adds \"$cat\" to its description",
+                        if (kind == Kind.APPROVED) {
+                            "In ${p.path.substringAfter(Gallery.FOLDER, p.path).let { Gallery.FOLDER + it }.substringBeforeLast('/')}" +
+                                (if (p.auto) " · auto-approved" else "") + " · Undo puts it back in ${p.from.trimEnd('/')} and the Inbox"
+                        } else {
+                            "In ${p.from.trimEnd('/')} · Approve moves it to PhotoGate/$cat and adds \"$cat\" to its description"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(16.dp))
+                    if (kind == Kind.APPROVED) {
+                        FilledTonalButton(onClick = { act { Gallery.undoApprove(c, p.id) } }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Undo approval")
+                        }
+                        TextButton(onClick = { act { Gallery.deleteApproved(c, p.id) } }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Delete from phone", color = MaterialTheme.colorScheme.error)
+                        }
+                    } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { act { Gallery.approve(c, p.id) } }, modifier = Modifier.weight(1f)) {
                             Text("Approve")
@@ -473,6 +585,7 @@ private fun Review(list: List<Photo>, id: Long, binMode: Boolean, onClose: () ->
                         onClick = { act { Gallery.deleteNow(c, p.id) } },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Delete now", color = MaterialTheme.colorScheme.error) }
+                    }
                 }
             }
         }
@@ -659,7 +772,7 @@ fun SettingsScreen(act: Actions) {
     val hasNotif = remember(tick) { runCatching { MainActivity.hasNotifications(c) }.getOrDefault(true) }
     val mode = remember(tick, now) { Store.mode(c) }
     val until = remember(tick, now) { Store.modeUntil(c) }
-    var modeChoice by remember { mutableStateOf("all") }
+    var modeChoice by remember { mutableStateOf<String?>(null) } // nothing preselected: a mode never starts by accident
     var hours by remember { mutableIntStateOf(8) }
 
     Column(
@@ -692,7 +805,9 @@ fun SettingsScreen(act: Actions) {
                 })
             }
             Spacer(Modifier.height(8.dp))
-            Text("Only catch photos newer than", style = MaterialTheme.typography.titleSmall)
+            Text("Notify only for photos newer than", style = MaterialTheme.typography.titleSmall)
+            Text("Older ones (e.g. noticed late) still land in the Inbox, just quietly.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Choices(
                 listOf(1 to "1 min", 5 to "5 min", 15 to "15 min", 60 to "1 hour", 0 to "No limit"),
                 window,
@@ -714,22 +829,30 @@ fun SettingsScreen(act: Actions) {
         Section("Quick modes") {
             if (mode != "ask") {
                 Text(
-                    (if (mode == "all") "Auto-approve" else "Not asking") + " until " +
+                    (if (mode == "all") "Auto-approve" else "Quiet mode") + " until " +
                         DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(until)),
                     style = MaterialTheme.typography.titleSmall,
                 )
                 OutlinedButton(onClick = { Store.stopMode(c) }) { Text("Stop now") }
             } else {
-                Choices(listOf("all" to "Auto-approve everything", "none" to "Don't ask at all"), modeChoice) { modeChoice = it }
+                Choices(listOf<Pair<String?, String>>("all" to "Auto-approve everything", "none" to "Quiet mode"), modeChoice) {
+                    modeChoice = if (modeChoice == it) null else it
+                }
                 Text(
-                    if (modeChoice == "all") "Every new photo moves straight to its PhotoGate folder. Handy on a trip."
-                    else "New photos stay where they are; nothing is moved or deleted.",
+                    when (modeChoice) {
+                        "all" -> "Every new photo moves straight to its PhotoGate folder and shows up under Approved. Handy on a trip."
+                        "none" -> "New photos still land in the Inbox, just without notifications."
+                        else -> "Pick a mode to run for a while. Nothing is on right now: every new photo asks."
+                    },
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(6.dp))
                 Choices(listOf(2 to "2 h", 8 to "8 h", 24 to "1 day", 96 to "4 days", 336 to "14 days"), hours) { hours = it }
                 Spacer(Modifier.height(6.dp))
-                Button(onClick = { Store.startMode(c, modeChoice, hours * 3_600_000L) }) { Text("Start") }
+                Button(enabled = modeChoice != null, onClick = {
+                    modeChoice?.let { Store.startMode(c, it, hours * 3_600_000L) }
+                    modeChoice = null
+                }) { Text("Start") }
                 Text("Modes switch themselves off when the time is up.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

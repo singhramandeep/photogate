@@ -98,6 +98,32 @@ object Store {
 
     fun stagedById(c: Context, id: Long): Photo? = staged(c).firstOrNull { it.id == id }
 
+    // ---- approved photos (newest last), so they can be seen and undone; capped so it stays small ----
+    @Synchronized
+    fun approved(c: Context): List<Photo> {
+        val raw = p(c).getString("approvedList", null) ?: return emptyList()
+        return runCatching {
+            val a = JSONArray(raw)
+            (0 until a.length()).map { Photo.fromJson(a.getJSONObject(it)) }
+        }.getOrDefault(emptyList())
+    }
+
+    @Synchronized
+    private fun putApproved(c: Context, list: List<Photo>) {
+        val a = JSONArray()
+        list.takeLast(1000).forEach { a.put(it.toJson()) }
+        p(c).edit().putString("approvedList", a.toString()).apply()
+        bump()
+    }
+
+    @Synchronized
+    fun addApproved(c: Context, ph: Photo) = putApproved(c, approved(c).filter { it.id != ph.id } + ph)
+
+    @Synchronized
+    fun removeApproved(c: Context, id: Long) = putApproved(c, approved(c).filter { it.id != id })
+
+    fun approvedById(c: Context, id: Long): Photo? = approved(c).firstOrNull { it.id == id }
+
     // ---- counters ----
     fun approvedCount(c: Context): Int = p(c).getInt("approved", 0)
     fun deletedCount(c: Context): Int = p(c).getInt("deleted", 0)
@@ -114,7 +140,7 @@ object Store {
         bump()
     }
 
-    // ---- temporary modes: "none" (don't ask, do nothing), "all" (approve everything) ----
+    // ---- temporary modes: "none" (collect quietly: Inbox, no notifications), "all" (approve everything) ----
     fun startMode(c: Context, mode: String, durationMs: Long) {
         p(c).edit().putString("mode", mode)
             .putLong("modeUntil", System.currentTimeMillis() + durationMs).apply()
@@ -157,6 +183,11 @@ object Store {
     }
 
     fun refresh() = bump()
+
+    fun flag(c: Context, name: String): Boolean = p(c).getBoolean("flag:$name", false)
+    fun setFlag(c: Context, name: String) {
+        p(c).edit().putBoolean("flag:$name", true).apply()
+    }
 
     // ---- activity log shown in Settings, to see what the scanner did ----
     @Synchronized

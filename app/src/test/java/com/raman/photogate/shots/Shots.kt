@@ -44,12 +44,15 @@ class Shots {
                 if (discarded) now + (if (i == 4) 200 else 45) * 60_000L else 0L))
         }
         folders.forEach { Store.setFolder(c, it, true) }
+        Store.addApproved(c, Photo(101, File(dir, "p0.jpg").path, "p0.jpg", "DCIM/Camera/", false, now, category = "Camera"))
+        Store.addApproved(c, Photo(102, File(dir, "p1.jpg").path, "p1.jpg", "Pictures/Screenshots/", false, now - 5, category = "Screenshots", auto = true))
+        Store.addApproved(c, Photo(103, File(dir, "p3.jpg").path, "p3.jpg", "Pictures/WhatsApp/", false, now - 9, category = "Social", auto = true))
     }
 
-    @Test fun inbox() { fixtures(); shot { InboxScreen {} } }
+    @Test fun inbox() { fixtures(); shot { InboxScreen({}) } }
     @Test fun bin() { fixtures(); shot { BinScreen() } }
     @Test fun binDark() { fixtures(); shot(dark = true) { BinScreen() } }
-    @Test fun emptyInbox() { shot { InboxScreen {} } }
+    @Test fun emptyInbox() { shot { InboxScreen({}) } }
     private val noop = object : Actions {
         override fun askAccess() {}
         override fun askNotifications() {}
@@ -58,6 +61,9 @@ class Shots {
         override fun stopWatching() {}
         override fun scanNow() {}
     }
+
+    @Test fun approved() { fixtures(); shot { ApprovedScreen() } }
+    @Test fun inboxWithAutoApproveOn() { fixtures(); Store.startMode(ctx, "all", 3_600_000L); shot { InboxScreen({}) } }
 
     @Test fun app() { fixtures(); shot { App(noop) } }
     @Test fun settings() { fixtures(); Gallery.previewAccess = false; shot { SettingsScreen(noop) } }

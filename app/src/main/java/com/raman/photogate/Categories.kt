@@ -23,6 +23,18 @@ object Categories {
         }
     }
 
+    /**
+     * Folder on disk for a category: "p" + name (pCamera, pScreenshots...). Galleries show only the folder name, so
+     * without the prefix PhotoGate's Camera folder would look exactly like the real Camera folder.
+     */
+    const val PREFIX = "p"
+
+    fun folderName(category: String): String? = clean(category)?.let { PREFIX + it }
+
+    /** Category from a folder name under PhotoGate: "pCamera" -> "Camera". */
+    fun fromFolder(name: String): String =
+        if (name.length > 1 && name.startsWith(PREFIX) && name[1].isUpperCase()) name.substring(1) else name
+
     /** Turns what the user typed into a safe folder name, or null if nothing usable is left. */
     fun clean(name: String): String? {
         val s = name.replace(Regex("""[\\/:*?"<>|\n\r\t]"""), " ")

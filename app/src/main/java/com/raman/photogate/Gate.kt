@@ -54,11 +54,39 @@ class Gate(val root: File) {
         if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create $root")
     }
 
-    /** Moves an approved photo out of its folder into PhotoGate/<category>. */
+    /** Moves an uploaded photo out of its folder into PhotoGate/p<category>. */
     fun approve(src: File, category: String? = null): File {
-        val dir = category?.let { Categories.clean(it) }?.let { File(root, it) } ?: root
+        val dir = category?.let { Categories.folderName(it) }?.let { File(root, it) } ?: root
         if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Cannot create $dir")
         return move(src, unique(dir, src.name))
+    }
+
+    /**
+     * One-time rename of category folders made before the "p" prefix: Camera -> pCamera. Returns old -> new path
+     * of every file that moved, so records and MediaStore can be updated. Never overwrites: a clash gets " (1)".
+     */
+    fun prefixOldFolders(): Map<String, String> {
+        val moved = LinkedHashMap<String, String>()
+        root.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") && !it.name.startsWith(Categories.PREFIX) }
+            ?.forEach { old ->
+                val target = File(root, Categories.PREFIX + old.name)
+                val files = old.walkTopDown().filter { it.isFile }.toList()
+                if (!target.exists() && old.renameTo(target)) {
+                    files.forEach { f -> moved[f.path] = File(target, f.relativeTo(old).path).path }
+                } else {
+                    // target already there (or rename refused): move file by file
+                    target.mkdirs()
+                    files.forEach { f ->
+                        try {
+                            moved[f.path] = move(f, unique(target, f.name)).path
+                        } catch (e: IOException) {
+                            // leave this one where it is
+                        }
+                    }
+                    if (old.walkTopDown().none { it.isFile }) old.deleteRecursively()
+                }
+            }
+        return moved
     }
 
     /** Deletes a file. True if it is gone (also when it was already gone). */

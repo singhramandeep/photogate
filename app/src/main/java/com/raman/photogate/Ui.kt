@@ -367,7 +367,7 @@ fun UploadedScreen() {
     if (all.isEmpty()) {
         EmptyState(
             "Nothing uploaded yet",
-            "Upload moves a photo to DCIM/PhotoGate/<category>, which your gallery syncs to Google Photos. " +
+            "Upload moves a photo to DCIM/PhotoGate/p<category> (e.g. pCamera), which your gallery syncs to Google Photos. " +
                 "Uploaded photos are listed here; Undo puts one back in the Inbox.",
         )
     } else {
@@ -514,7 +514,7 @@ private fun Review(list: List<Photo>, id: Long, kind: Kind, onClose: () -> Unit,
                             "In ${p.path.substringAfter(Gallery.FOLDER, p.path).let { Gallery.FOLDER + it }.substringBeforeLast('/')}" +
                                 " · Undo puts it back in ${p.from.trimEnd('/')} and the Inbox"
                         } else {
-                            "In ${p.from.trimEnd('/')} · Upload moves it to PhotoGate/$cat (synced to Google Photos) and adds \"$cat\" to its description"
+                            "In ${p.from.trimEnd('/')} · Upload moves it to PhotoGate/${Categories.folderName(cat)} (synced to Google Photos) and adds \"$cat\" to its description"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -585,7 +585,8 @@ fun SourcesScreen(preview: List<Pair<String, Int>>? = null) {
         item {
             Text(
                 "Turn on the folders to watch and give each one a category. Uploaded photos move to " +
-                    "PhotoGate/<category>. A folder only catches what arrives after you turn it on.",
+                    "PhotoGate/p<category> (pCamera, pScreenshots...), so the gallery can tell them apart from the real " +
+                    "folders. A folder only catches what arrives after you turn it on.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -629,7 +630,7 @@ private fun SourceCard(path: String, count: Int, tracked: Boolean) {
                     CategoryPicker(cat) { Store.setCategory(c, path, it) }
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        "→ PhotoGate/$cat",
+                        "→ PhotoGate/${Categories.folderName(cat)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -762,7 +763,7 @@ fun SettingsScreen(act: Actions) {
             listOf(
                 "Google Photos app > Backup: turn it off.",
                 "Upload one photo, so the PhotoGate folders exist.",
-                "Samsung Gallery > Settings > Sync with Google Photos: switch on only the PhotoGate folders, leave Camera off.",
+                "Samsung Gallery > Settings > Sync with Google Photos: switch on only the p-folders (pCamera, pScreenshots...), leave Camera off.",
             ).forEachIndexed { i, step ->
                 Row(Modifier.padding(vertical = 3.dp)) {
                     Text("${i + 1}.", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,

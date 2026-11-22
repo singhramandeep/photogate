@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * What PhotoGate does with files. While waiting, a photo stays in its original folder.
- * Upload moves it into DCIM/PhotoGate/<category> (synced by the gallery), Bin deletes it after the Bin timer,
+ * Upload moves it into DCIM/PhotoGate/p<category> (synced by the gallery), Bin deletes it after the Bin timer,
  * Delete now deletes it at once.
  */
 object Gallery {
@@ -142,6 +142,7 @@ object Gallery {
     @Synchronized
     fun sweep(c: Context) {
         restoreOldStaging(c)
+        prefixOldFolders(c)
         importExistingApproved(c)
         val list = Store.staged(c)
         Gate.due(list, System.currentTimeMillis()).forEach { deleteNow(c, it.id) }
@@ -156,6 +157,22 @@ object Gallery {
         val delay = (next - System.currentTimeMillis()).coerceAtLeast(0L)
         val req = OneTimeWorkRequestBuilder<SweepWorker>().setInitialDelay(delay, TimeUnit.MILLISECONDS).build()
         WorkManager.getInstance(c.applicationContext).enqueueUniqueWork("sweep", ExistingWorkPolicy.REPLACE, req)
+    }
+
+    /** Once: Camera -> pCamera etc. for folders made before the prefix, keeping the Uploaded list in step. */
+    private fun prefixOldFolders(c: Context) {
+        if (Store.flag(c, "prefixedFolders")) return
+        val moved = gate().prefixOldFolders()
+        if (moved.isNotEmpty()) {
+            Store.approved(c).forEach { a ->
+                moved[a.path]?.let { Store.addApproved(c, a.copy(path = it, name = File(it).name)) }
+            }
+            moved.entries.chunked(200).forEach { batch ->
+                rescan(c, *(batch.map { it.key } + batch.map { it.value }).toTypedArray())
+            }
+            Store.log(c, "Renamed PhotoGate folders with a \"p\" prefix (${moved.size} files moved)")
+        }
+        Store.setFlag(c, "prefixedFolders")
     }
 
     /**
@@ -174,7 +191,7 @@ object Gallery {
             .toList()
         val folders = Store.folders(c)
         found.forEach { f ->
-            val cat = if (f.parentFile == root) "" else f.parentFile!!.name
+            val cat = if (f.parentFile == root) "" else Categories.fromFolder(f.parentFile!!.name)
             val from = folders.firstOrNull { Store.categoryOf(c, it) == cat } ?: "DCIM/Camera/"
             val video = f.extension.lowercase() in setOf("mp4", "3gp", "mkv", "webm", "mov")
             Store.addApproved(c, Photo(-(f.path.hashCode().toLong() and 0x7fffffffL) - 1, f.path, f.name, from, video,

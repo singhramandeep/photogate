@@ -12,7 +12,8 @@ How it works:
    (Camera, Screenshots, Social, Downloads, Other, or your own). Watching starts by itself.
 2. Every new photo or video in those folders stays where it is and lands in the **Inbox**, with a quiet notification.
 3. For each one choose:
-   - **Upload:** moves it to `DCIM/PhotoGate/<category>/` and writes the category into its description. Your
+   - **Upload:** moves it to `DCIM/PhotoGate/p<category>/` (pCamera, pScreenshots...; the "p" keeps the gallery from
+     showing two albums called "Camera") and writes the category into its description. Your
      gallery syncs only those folders to Google Photos. Listed under **Uploaded**, with Undo.
    - **Bin:** waits in the **Bin** with a ⏱ countdown, then is deleted from the phone (timer in Settings).
      You can still Upload it or send it back to the Inbox.
@@ -40,9 +41,7 @@ APK: `app/build/outputs/apk/release/app-release.apk`.
 4. Upload one photo so `DCIM/PhotoGate` exists. Then:
    - Google Photos app > Settings > Backup: turn **off** (it always includes Camera, so it can't be used).
    - Samsung Gallery > Settings > **Sync with Google Photos** (Cloud sync): choose albums to sync, switch on only the
-     PhotoGate category folders, Camera and everything else off. Careful: `DCIM/PhotoGate/Camera` shows up as an
-     album named "Camera", just like your real Camera folder. Pick the one inside PhotoGate (or name the category
-     something else, e.g. "Camera approved").
+     p-folders (pCamera, pScreenshots...), Camera and everything else off.
 
 ## Tests
 

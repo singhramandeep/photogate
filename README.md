@@ -8,10 +8,10 @@ Selective photo backup for Android 11+, without any Google login or Google Cloud
 
 How it works:
 
-- Photos are never moved. When a new photo or video lands in a folder you chose (Camera, Screenshots, ...), it stays
-  right there and a quiet notification (and the Pending tab) offers **Approve**, **Discard** or **Delete now**.
-- **Approve** puts a copy in `DCIM/PhotoGate/`, a normal device folder. In Google Photos, turn on backup for that one
-  folder only, and only approved photos reach the cloud. The original stays in its folder.
+- When a new photo or video lands in a folder you chose (Camera, Screenshots, ...), it stays right there and a quiet
+  notification (and the Pending tab) offers **Approve**, **Discard** or **Delete now**.
+- **Approve** moves it into `DCIM/PhotoGate/`, a normal device folder. Sync only that folder to Google Photos (see
+  First run), and only approved photos reach the cloud.
 - **Discard** deletes the original after a delay (Immediately / 1 h / 4 h / 8 h / 24 h, set in Settings). Until then
   it is listed under Discarded, where you can still Approve or Delete now.
 - **Delete now** deletes the original at once.
@@ -30,20 +30,20 @@ APK: `app/build/outputs/apk/release/app-release.apk`.
 ## 2. First run
 
 1. Install the APK and open it > Settings > **All files access: Allow**. A system screen opens: switch on
-   PhotoGate, then go back. (Android needs this so the app can delete discarded photos that the camera app
+   PhotoGate, then go back. (Android needs this so the app can move and delete photos that the camera app
    created without asking you to confirm each one.)
 2. Settings > Notifications: **Allow** (Android 13+).
 3. Folders tab: switch on the folders you want caught. Camera is on by default.
 4. Settings > switch on **Watch for new photos**.
-5. Approve one photo so `DCIM/PhotoGate` exists. Then in Google Photos > Settings > Backup:
-   - **Back up device folders**: switch on **PhotoGate**.
-   - Switch off every other folder. Because originals stay in Camera, this only works if Google Photos lets you
-     exclude Camera; on some versions Camera is always backed up while backup is on. Check this on your phone.
+5. Approve one photo so `DCIM/PhotoGate` exists. Then:
+   - Google Photos app > Settings > Backup: turn **off** (it always includes Camera, so it can't be used).
+   - Samsung Gallery > Settings > **Sync with Google Photos** (Cloud sync): choose albums to sync, switch on
+     **PhotoGate** only, Camera and everything else off.
 
 ## Tests
 
-`gradle :app:testDebugUnitTest` runs the unit tests: real files in a temporary folder (approve copies and leaves the
-original, no hidden folder, name clashes never overwrite, file date kept, delete, putting back photos staged by the
+`gradle :app:testDebugUnitTest` runs the unit tests: real files in a temporary folder (approve moves the photo into
+PhotoGate, no hidden folder, name clashes never overwrite, file date kept, delete, putting back photos staged by the
 earlier version), deletion timing, and the scan decisions (folders, modes, decision window, never asking about
 PhotoGate's own folder, waiting while the camera is still writing).
 
@@ -51,8 +51,6 @@ PhotoGate's own folder, waiting while the camera is still writing).
 
 - The signing key is committed on purpose so updates install over each other. This is a personal sideload app;
   do not publish it to the Play Store with this key.
-- Approved photos take space twice on the phone (original + copy) until you delete one, e.g. with Google Photos'
-  "Free up space" after backup.
 - An earlier test version moved waiting photos into a hidden `DCIM/PhotoGate/.staging` folder. This version puts
   them back into their original folders the first time it opens, then removes that folder.
 - The Google Photos API upload version (with sign-in) is in git history at commit c77f25c.

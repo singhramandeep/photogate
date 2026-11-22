@@ -18,11 +18,11 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * What PhotoGate does with files. Photos always stay in their original folder:
- * Approve copies one into DCIM/PhotoGate, Discard deletes the original after a delay, Delete now deletes it at once.
+ * What PhotoGate does with files. While waiting, a photo stays in its original folder.
+ * Approve moves it into DCIM/PhotoGate, Discard deletes it after a delay, Delete now deletes it at once.
  */
 object Gallery {
-    /** RELATIVE_PATH of the approved folder. Turn on backup for this folder in Google Photos. */
+    /** RELATIVE_PATH of the approved folder. Sync only this folder to Google Photos (Samsung Gallery). */
     const val FOLDER = "DCIM/PhotoGate/"
 
     private val sdcard: File get() = Environment.getExternalStorageDirectory()
@@ -47,12 +47,12 @@ object Gallery {
             .also { Store.addStaged(c, it) }
     }
 
-    /** "Approve everything" mode: copy straight into PhotoGate. */
+    /** "Approve everything" mode: move straight into PhotoGate. */
     fun approveDirect(c: Context, item: Item): Boolean {
         val src = item.file ?: return false
         return try {
             val dst = gate().approve(src)
-            rescan(c, dst.path)
+            rescan(c, src.path, dst.path)
             Store.countApproved(c)
             true
         } catch (e: IOException) {
@@ -66,7 +66,7 @@ object Gallery {
         return try {
             val dst = gate().approve(File(p.path))
             Store.removeStaged(c, id)
-            rescan(c, dst.path)
+            rescan(c, p.path, dst.path) // gone from its old folder, new in PhotoGate
             Store.countApproved(c)
             true
         } catch (e: IOException) {

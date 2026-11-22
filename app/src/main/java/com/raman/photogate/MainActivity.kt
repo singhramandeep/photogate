@@ -209,7 +209,7 @@ fun PendingScreen() {
             Column {
                 Text("Pending", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "${waiting.size} waiting. They stay in their folders; Approve puts a copy in ${Gallery.FOLDER.trimEnd('/')}.",
+                    "${waiting.size} waiting. They stay in their folders; Approve moves them to ${Gallery.FOLDER.trimEnd('/')}.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -321,7 +321,7 @@ fun FoldersScreen() {
         Spacer(Modifier.height(8.dp))
         Text(
             "New photos and videos in the folders you switch on ask for a decision. They stay in their folder: " +
-                "Approve copies them to PhotoGate, Discard deletes them. " +
+                "Approve moves them to PhotoGate, Discard deletes them. " +
                 "A folder you add only asks about what arrives from now on.",
             style = MaterialTheme.typography.bodySmall,
         )
@@ -368,8 +368,8 @@ fun ModesScreen() {
     val running = current != "ask"
 
     val options = listOf(
-        Triple("none", "Don't ask", "New photos stay where they are and nothing is copied or deleted."),
-        Triple("all", "Approve everything", "Stop asking me. Each photo is copied to PhotoGate. Useful on a trip."),
+        Triple("none", "Don't ask", "New photos stay where they are and nothing is moved or deleted."),
+        Triple("all", "Approve everything", "Stop asking me. Each photo moves straight to PhotoGate. Useful on a trip."),
     )
     val durations = listOf(2 to "2 hours", 8 to "8 hours", 24 to "1 day", 96 to "4 days", 336 to "14 days")
 
@@ -439,7 +439,7 @@ fun SettingsScreen(act: MainActivity) {
         Spacer(Modifier.height(12.dp))
 
         SettingRow("All files access",
-            if (hasAccess) "Granted." else "Needed to see new photos, copy them and delete discarded ones. Opens a system screen: switch it on and come back.") {
+            if (hasAccess) "Granted." else "Needed to see new photos, move approved ones and delete discarded ones. Opens a system screen: switch it on and come back.") {
             if (!hasAccess) Button(onClick = { act.askAccess() }) { Text("Allow") }
         }
         HorizontalDivider()
@@ -496,13 +496,15 @@ fun SettingsScreen(act: MainActivity) {
 
         Spacer(Modifier.height(16.dp))
         HorizontalDivider()
-        SettingRow("Back up only PhotoGate",
-            "In Google Photos: Settings > Backup > Back up device folders, switch on PhotoGate. " +
-                "The folder appears there after your first approved photo.") {
+        SettingRow("Sync only PhotoGate",
+            "Turn off Google Photos' own backup. In Samsung Gallery: Settings > Sync with Google Photos > " +
+                "choose albums: only PhotoGate, Camera off. It appears after your first approved photo.") {
             OutlinedButton(onClick = {
-                val i = c.packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
+                val pm = c.packageManager
+                val i = pm.getLaunchIntentForPackage("com.sec.android.gallery3d")
+                    ?: pm.getLaunchIntentForPackage("com.google.android.apps.photos")
                 if (i != null) c.startActivity(i)
-                else Toast.makeText(c, "Google Photos is not installed", Toast.LENGTH_SHORT).show()
+                else Toast.makeText(c, "No gallery app found", Toast.LENGTH_SHORT).show()
             }) { Text("Open") }
         }
     }

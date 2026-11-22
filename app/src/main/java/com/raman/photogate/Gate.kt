@@ -38,7 +38,8 @@ data class Photo(
 
 /**
  * Plain file operations behind PhotoGate (no Android APIs, so they are unit tested with real files).
- * [root] is DCIM/PhotoGate: copies of approved photos, a normal device folder that Google Photos can back up.
+ * [root] is DCIM/PhotoGate: approved photos, a normal device folder that is synced to Google Photos on its own
+ * (e.g. with Samsung Gallery's Google Photos sync, Camera folder off).
  */
 class Gate(val root: File) {
     /** Where an earlier version kept photos while waiting. Only used to put them back. */
@@ -48,10 +49,10 @@ class Gate(val root: File) {
         if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create $root")
     }
 
-    /** Copies an approved photo into PhotoGate. The original stays where it is. */
+    /** Moves an approved photo out of its folder into PhotoGate. */
     fun approve(src: File): File {
         ensureDirs()
-        return copy(src, unique(root, src.name))
+        return move(src, unique(root, src.name))
     }
 
     /** Deletes a file. True if it is gone (also when it was already gone). */
@@ -89,7 +90,7 @@ class Gate(val root: File) {
             return dst
         }
 
-        /** Rename when possible, else copy and delete. Used only to put old staged files back. */
+        /** Rename when possible (instant), else copy and delete. Exactly one copy exists afterwards. */
         fun move(src: File, dst: File): File {
             if (!src.isFile) throw IOException("Missing $src")
             dst.parentFile?.mkdirs()

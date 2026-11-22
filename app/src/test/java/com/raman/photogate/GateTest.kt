@@ -26,17 +26,27 @@ class GateTest {
     }
 
     @Test
-    fun approveCopiesAndOriginalStaysInItsFolder() {
+    fun approveMovesPhotoOutOfItsFolderIntoPhotoGate() {
         val (sd, gate) = phone()
         val bytes = ByteArray(300_000) { (it % 251).toByte() }
         val original = photo(File(sd, "DCIM/Camera"), "IMG_1.jpg", bytes)
 
-        val copy = gate.approve(original)
-        assertTrue("original untouched", original.exists())
-        assertArrayEquals(bytes, original.readBytes())
-        assertEquals(File(sd, "DCIM/PhotoGate/IMG_1.jpg"), copy)
-        assertArrayEquals(bytes, copy.readBytes())
-        assertEquals("photo date is kept", 1_700_000_000_000L, copy.lastModified())
+        val moved = gate.approve(original)
+        assertFalse("left the camera folder", original.exists())
+        assertEquals(File(sd, "DCIM/PhotoGate/IMG_1.jpg"), moved)
+        assertArrayEquals(bytes, moved.readBytes())
+        assertEquals("photo date is kept", 1_700_000_000_000L, moved.lastModified())
+    }
+
+    @Test
+    fun copyFallbackKeepsExactlyOneFile() {
+        val (sd, _) = phone()
+        val src = photo(File(sd, "DCIM/Camera"), "v.mp4", ByteArray(1_000_000) { it.toByte() })
+        val dst = File(sd, "DCIM/PhotoGate/v.mp4").also { it.parentFile!!.mkdirs() }
+        Gate.copy(src, dst)
+        assertTrue(src.delete())
+        assertEquals(1_000_000L, dst.length())
+        assertEquals(1_700_000_000_000L, dst.lastModified())
     }
 
     @Test

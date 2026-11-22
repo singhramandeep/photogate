@@ -12,8 +12,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Android 11+ hides other apps unless declared: needed for the "Open Google Photos" button -->
+    <!-- Android 11+ hides other apps unless declared: needed for the "Open" gallery button -->
     <queries>
+        <package android:name="com.sec.android.gallery3d" />
         <package android:name="com.google.android.apps.photos" />
     </queries>
 

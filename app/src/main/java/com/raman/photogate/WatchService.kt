@@ -17,7 +17,7 @@ class WatchService : Service() {
     private val scanNow: Runnable = Runnable {
         Thread {
             // a file still being written is looked at again shortly
-            if (Processor.scan(applicationContext)) handler.postDelayed(scanNow, Processor.SETTLE_MS + 500)
+            if (Processor.scanSafely(applicationContext, "change")) handler.postDelayed(scanNow, Processor.SETTLE_MS + 500)
         }.start()
     }
 
@@ -32,6 +32,7 @@ class WatchService : Service() {
     override fun onCreate() {
         super.onCreate()
         Notifier.channels(this)
+        Store.log(this, "Watcher started")
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(1, Notifier.watching(this), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {

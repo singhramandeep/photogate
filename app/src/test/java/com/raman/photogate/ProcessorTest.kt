@@ -40,6 +40,15 @@ class ProcessorTest {
     @Test fun longVideoCountsFromWhenRecordingStopped() =
         assertEquals(Action.ASK, decide(item(addedAgoMs = 20 * 60_000, modifiedAgoMs = 30_000), windowMin = 1))
 
+    @Test fun skipReasonsAreSpecific() {
+        val t = now - 10_000
+        assertEquals("folder Pictures/X/ is not switched on in Sources",
+            Processor.skipReason("Pictures/X/", setOf(cam), "ask", 0, t, now))
+        assertEquals("older than the decision window",
+            Processor.skipReason(cam, setOf(cam), "ask", 1_000, t, now))
+        assertEquals("\"Don't ask\" mode is on", Processor.skipReason(cam, setOf(cam), "none", 0, t, now))
+    }
+
     @Test fun pruneDropsOnlyEntriesOlderThanLookbackTwice() {
         val nowSec = now / 1000
         val m = mapOf(1L to nowSec, 2L to nowSec - Processor.LOOKBACK_SEC - 10, 3L to nowSec - 3 * Processor.LOOKBACK_SEC)

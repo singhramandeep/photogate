@@ -157,4 +157,21 @@ object Store {
     }
 
     fun refresh() = bump()
+
+    // ---- activity log shown in Settings, to see what the scanner did ----
+    @Synchronized
+    fun log(c: Context, msg: String) {
+        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        val lines = (logLines(c) + "$time  $msg").takeLast(80)
+        p(c).edit().putString("log", lines.joinToString("\n")).apply()
+        bump()
+    }
+
+    fun logLines(c: Context): List<String> =
+        p(c).getString("log", null)?.split('\n')?.filter { it.isNotEmpty() } ?: emptyList()
+
+    fun clearLog(c: Context) {
+        p(c).edit().remove("log").apply()
+        bump()
+    }
 }

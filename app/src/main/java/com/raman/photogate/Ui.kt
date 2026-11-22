@@ -121,6 +121,7 @@ interface Actions {
     fun openGallery()
     fun startWatching()
     fun stopWatching()
+    fun scanNow()
 }
 
 /** Runs a file action off the main thread (moving a big video can take a moment). */
@@ -731,6 +732,27 @@ fun SettingsScreen(act: Actions) {
                 Button(onClick = { Store.startMode(c, modeChoice, hours * 3_600_000L) }) { Text("Start") }
                 Text("Modes switch themselves off when the time is up.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        Section("Activity") {
+            val lines = remember(tick) { Store.logLines(c).takeLast(25).reversed() }
+            val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = { act.scanNow() }) { Text("Scan now") }
+                OutlinedButton(onClick = {
+                    clip.setText(androidx.compose.ui.text.AnnotatedString(Store.logLines(c).joinToString("\n")))
+                }) { Text("Copy") }
+                TextButton(onClick = { Store.clearLog(c) }) { Text("Clear") }
+            }
+            Spacer(Modifier.height(6.dp))
+            if (lines.isEmpty()) {
+                Text("Nothing yet. Take a photo, then come back here.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            lines.forEach {
+                Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    modifier = Modifier.padding(vertical = 2.dp))
             }
         }
 

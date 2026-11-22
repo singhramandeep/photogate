@@ -34,9 +34,24 @@ class MainActivity : ComponentActivity(), Actions {
         if (Store.watch(this) && Gallery.hasAccess()) startWatching(this) // also restarts a refused boot start
         val app = applicationContext
         Thread {
-            Processor.scan(app)
-            Gallery.sweep(app) // deletions that came due while the phone was off
+            scanUntilSettled(app, "App opened")
+            try {
+                Gallery.sweep(app) // deletions that came due while the phone was off
+            } catch (e: Throwable) {
+                Store.log(app, "Cleanup failed: $e")
+            }
         }.start()
+    }
+
+    override fun scanNow() {
+        val app = applicationContext
+        Thread { scanUntilSettled(app, "Scan now") }.start()
+    }
+
+    /** Scans, and again a few seconds later while a file is still being written (max ~20 s). */
+    private fun scanUntilSettled(app: Context, why: String) {
+        var tries = 0
+        while (Processor.scanSafely(app, why) && tries++ < 5) Thread.sleep(Processor.SETTLE_MS + 500)
     }
 
     override fun askAccess() {

@@ -56,6 +56,7 @@ class Shots {
         override fun openGallery() {}
         override fun startWatching() {}
         override fun stopWatching() {}
+        override fun scanNow() {}
     }
 
     @Test fun app() { fixtures(); shot { App(noop) } }
